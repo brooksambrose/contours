@@ -35,5 +35,5 @@ network
 sna',s='\n') %>% {
   inst<-setdiff(.,installed.packages() %>% rownames)
   #load<-intersect(.,installed.packages() %>% rownames)
-  install.packages(inst,Ncpus=parallel::detectCores()-1)
+  install.packages(inst,Ncpus=max(1,parallel::detectCores()-1))
 }

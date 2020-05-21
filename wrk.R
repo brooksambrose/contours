@@ -1,5 +1,5 @@
 load('Out/wok2dbl.RData')
-load('Out/cgr.RData') # omit _culled to see clustering with idiosyncratic ties
+load('Out/cgr_culled.RData') # omit _culled to see clustering with idiosyncratic ties
 library(magrittr)
 library(data.table)
 library(ggplot2)
