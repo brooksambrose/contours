@@ -3,7 +3,7 @@
 # Sys.setenv(R_LIBS=paste(lib,Sys.getenv('R_LIBS'),sep=':'),R_LIBS_USER=lib)
 # .libPaths(Sys.getenv("R_LIBS_USER"))
 if(!require(devtools)) {install.packages('devtools');library(devtools)}
-if(!require(kableExtra)) {install.packages('kableExtra')}
+#if(!require(kableExtra)) {install.packages('kableExtra')}
 {devtools::install_github(
   'brooksambrose/pack-dev',subdir='tilit'
   #,lib=lib
