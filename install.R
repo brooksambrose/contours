@@ -5,7 +5,7 @@
 if(!require(devtools)) {install.packages('devtools');library(devtools)}
 #if(!require(kableExtra)) {install.packages('kableExtra')}
 {devtools::install_github(
-  'brooksambrose/pack-dev',subdir='tilit'
+  'brooksambrose/pack-dev',subdir='tilit',dependencies=T
   #,lib=lib
 );library(tilit)}
 if(!require(magrittr)) {install.packages('magrittr');library(magrittr)}
