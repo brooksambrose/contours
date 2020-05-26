@@ -37,3 +37,5 @@ sna',s='\n') %>% {
   #load<-intersect(.,installed.packages() %>% rownames)
   install.packages(inst,Ncpus=max(1,parallel::detectCores()-1))
 }
+# special packages
+devtools::install_github('bstewart/stm',ref = 'development')
