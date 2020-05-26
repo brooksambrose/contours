@@ -10,7 +10,8 @@ if(!require(devtools)) {install.packages('devtools');library(devtools)}
 );library(tilit)}
 if(!require(magrittr)) {install.packages('magrittr');library(magrittr)}
 tilit::ec(
-  'data.table
+'data.table
+epubr
 cowplot
 igraph
 viridisLite
