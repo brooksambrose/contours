@@ -12,6 +12,7 @@ if(!require(magrittr)) {install.packages('magrittr');library(magrittr)}
 tilit::ec(
 'data.table
 epubr
+pbapply
 cowplot
 igraph
 viridisLite
