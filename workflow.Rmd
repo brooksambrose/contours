@@ -1,11 +1,21 @@
 ```{r init}
 rm(list=ls()) # clear workspace
 cat('\014') # clear console
+knitr::opts_chunk$set(
+  eval=T
+  ,include=F
+)
 library(tilit);library(magrittr)
 '' %>% ec %>% sapply(library,character.only = T) %>% invisible # load packages
 ```
 
-```{r}
-
+```{r wok2dbl}
+f<-'Out/wok2dbl.RData'
+if(file.exists(f)){
+  load(f)
+} else {
+  wok2dbl<-plagiat::wok2dbl.f(dir = 'WoS.TextFiles.19Sept2018.61551/', out = 'Out')
+  save(wok2dbl,file=f)
+}
+rm(f)
 ```
-
