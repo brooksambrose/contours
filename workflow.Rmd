@@ -1,0 +1,11 @@
+```{r init}
+rm(list=ls()) # clear workspace
+cat('\014') # clear console
+library(tilit);library(magrittr)
+'' %>% ec %>% sapply(library,character.only = T) %>% invisible # load packages
+```
+
+```{r}
+
+```
+
