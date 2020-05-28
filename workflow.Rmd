@@ -1,5 +1,6 @@
 ```{r init}
-rm(list=ls()) # clear workspace
+stop('Don\'t run me dummy')
+#rm(list=ls()) # clear workspace
 cat('\014') # clear console
 knitr::opts_chunk$set(
   eval=T
@@ -7,7 +8,8 @@ knitr::opts_chunk$set(
 )
 library(tilit);library(magrittr)
 'data.table' %>% ec %>% sapply(library,character.only = T) %>% invisible # load packages
-data.table::setDTthreads(threads = max(1,parallel::detectCores()-1)) # give data.table access to more cores
+data.table::setDTthreads(percent=75) # give data.table access to more than 50% cores
+if(!dir.exists('d')) system('mkdir d && (cd d && mkdir q d p b)') # create data directory structure if it doesn't exist
 ```
 # Import WOK Data
 
@@ -52,14 +54,15 @@ wok2dbl['CR',on='field',unique(val) %>% length]
 # Bimodal edge list
 
 ```{r dbl2bel}
-f<-'Out/dbl2bel.RData'
+f<-'d/p/dbl2bel.RData'
 if(file.exists(f)){
   load(f)
 } else {
-  dbl2bel<-plagiat::dbl2bel.f(wok2dbl,trim_doi = F,trim_anon = T,trim_loops = T,capitalize = T,trim_pendants = T)
+  dbl2bel<-plagiat::dbl2bel.f(wok2dbl,out=dirname(f),trim_doi = T,trim_anon = T,trim_loops = T,capitalize = T,trim_pendants = T) %>% invisible
   save(dbl2bel,file=f)
 }
 rm(f)
+attributes(dbl2bel)$results
 ```
 
 # Unimodal edgelist
@@ -69,11 +72,16 @@ f<-'d/p/bel2mel.RData'
 if(file.exists(f)){
   load(f)
 } else {
-  bel2mel<-plagiat::bel2mel.f(dbl2bel,type = 'crel',out = 'd/p')
+  bel2mel<-plagiat::bel2mel.f(dbl2bel[!(pend|loop),.(ut,cr)],type = 'crel',out = dirname(f))
+  # trim edges where weight = 1
+  
   save(bel2mel,file=f)
 }
 rm(f)
 ```
+
+<!--
+# Unimodal graph
 
 ```{r}
 library(igraph)
@@ -108,3 +116,4 @@ sm[,cr:=cgr$names]
 sm[,m:=as.integer(h1)] %>% setkey(m)
 ```
 
+-->
