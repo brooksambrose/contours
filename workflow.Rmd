@@ -1,5 +1,5 @@
 ```{r init}
-stop('Don\'t run me dummy')
+#stop('Don\'t run me dummy')
 #rm(list=ls()) # clear workspace
 cat('\014') # clear console
 knitr::opts_chunk$set(
@@ -24,6 +24,7 @@ if(file.exists(f)){
   wok2dbl<-plagiat::wok2dbl.f(dir = 'WoS.TextFiles.19Sept2018.61551/', out = 'Out')
   save(wok2dbl,file=f)
 }
+wok2dbl<-unique(wok2dbl)
 rm(f)
 ```
 
@@ -63,7 +64,8 @@ if(file.exists(f)){
 }
 rm(f)
 attributes(dbl2bel)$results
-dbl2bel<-dbl2bel[!(pend|loop),.(ut,cr)]
+rm(wok2dbl)
+dbl2bel<-unique(dbl2bel[!(pend|loop),.(ut,cr)]) %>% setkey(ut,cr)
 ```
 
 # Unimodal edgelist
@@ -73,10 +75,20 @@ f<-'d/p/bel2mel.RData'
 if(file.exists(f)){
   load(f)
 } else {
-  bel2mel<-plagiat::bel2mel.f(dbl2bel,type = 'crel',out = dirname(f))
+  #bel2mel<-plagiat::bel2mel.f(dbl2bel,type = 'crel',out = dirname(f))
   # trim edges where weight = 1
-  
+  bel2mel<-list()
+  bel2mel$crel<-pbapply::pblapply(
+    split(unique(dbl2bel)[,.(ut=ut %>% unique,batch=1:ceiling((ut %>% unique %>% length)/100))][,.(ut,batch=sort(batch))],by = 'batch',keep.by = F)
+    ,function(x) dbl2bel[x,data.table(do.call(rbind,lapply(1:(length(cr) - 1), function(y) matrix(cr[c(rep(y,length(cr) - y), (y + 1):length(cr))], ncol = 2)))),by = ut]
+    ,cl=1
+  )
   save(bel2mel,file=f)
+  # bel2mel$crel %<>% rbindlist %>% setnames(old=c('V1','V2'),new=c('cr1','cr2'))
+  # save(bel2mel,file=f)
+  # bel2mel$crel %<>%  {.[,.(ew =.N,ut=list(ut)),keyby=.(cr1,cr2)]}
+  # save(bel2mel,file=f)
+  browseURL('https://hub.gke.mybinder.org/user/brooksambrose-contours-kaohkdmk/rstudio/export/bel2mel.RData?name=bel2mel.RData&file=~%2Fd%2Fp%2Fbel2mel.RData')
 }
 rm(f)
 ```
