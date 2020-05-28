@@ -6,11 +6,16 @@ knitr::opts_chunk$set(
   ,include=F
 )
 library(tilit);library(magrittr)
-'' %>% ec %>% sapply(library,character.only = T) %>% invisible # load packages
+'data.table' %>% ec %>% sapply(library,character.only = T) %>% invisible # load packages
+data.table::setDTthreads(threads = max(1,parallel::detectCores()-1)) # give data.table access to more cores
 ```
+# Import WOK Data
 
 ```{r wok2dbl}
-f<-'Out/wok2dbl.RData'
+# create link to original location in clean data structure 
+if(!file.exists('d/p/wok2dbl.RData')) system('link Out/wok2dbl.RData d/p/wok2dbl.RData')
+# Code that would generate database, but load saved data instead. Note original WOK records absent from repository.
+f<-'d/p/wok2dbl.RData'
 if(file.exists(f)){
   load(f)
 } else {
@@ -19,3 +24,87 @@ if(file.exists(f)){
 }
 rm(f)
 ```
+
+<!--
+## WOK Descriptives
+
+```{r descriptive}
+nut<-wok2dbl[,id %>% unique %>% length]
+n<-wok2dbl['CR',on='field',.N,by=val][,table(N)] %>% {data.table(N=as.integer(names(.)),nn=as.integer(.))}
+n[,cs:=cumsum(nn)]
+n[,cp:=round(cs/max(cs),4)]
+n[,rcs:=cumsum(nn %>% rev)]
+n[rcs>=180542]
+n
+n[,rcs:=NULL]
+n
+n %>% setorder(-N)
+n
+n[,rcs:=cumsum(nn)]
+n
+n[rcs>=180542]
+n[rcs<180542]
+wok2dbl['CR',on='field',unique(val) %>% length]
+
+```
+-->
+
+# Bimodal edge list
+
+```{r dbl2bel}
+f<-'Out/dbl2bel.RData'
+if(file.exists(f)){
+  load(f)
+} else {
+  dbl2bel<-plagiat::dbl2bel.f(wok2dbl,trim_doi = F,trim_anon = T,trim_loops = T,capitalize = T,trim_pendants = T)
+  save(dbl2bel,file=f)
+}
+rm(f)
+```
+
+# Unimodal edgelist
+
+```{r bel2mel}
+f<-'d/p/bel2mel.RData'
+if(file.exists(f)){
+  load(f)
+} else {
+  bel2mel<-plagiat::bel2mel.f(dbl2bel,type = 'crel',out = 'd/p')
+  save(bel2mel,file=f)
+}
+rm(f)
+```
+
+```{r}
+library(igraph)
+load('Out/el.RData')
+g<-graph_from_edgelist(el %>% as.matrix)
+V(g)$type<-grepl('^WOS:',V(g)$name)
+system.time(cg<-cluster_louvain(as.undirected(g)))
+ct<-apply(cg$memberships,1,function(x) x %>% table %>% sort(decreasing = T))
+View(ct)
+system.time(gcr<-bipartite_projection(g,which='false'))
+save(gcr,file='Out/gcr.RData')
+
+# count 
+load('Out/gcr.RData')
+system.time(et<-E(gcr)$weight %>% table %>% prop.table %>% `*`(100))
+cbind(round(et,4))[1:10,]
+
+# keep only edge weights greater than 1
+gcr<-subgraph.edges(gcr,which(E(gcr)$weight>1))
+save(gcr,file='Out/gcr_cull.RData')
+
+# cluster culled graph
+system.time(cgr<-cluster_louvain(gcr))
+save(cgr,file='Out/cgr_culled.RData')
+
+# rename cluster ids to be in sequence by size
+sm<-list()
+for(i in 1:nrow(cgr$memberships)) sm[[i]]<-factor(cgr$memberships[i,],levels=order(table(cgr$memberships[i,]),decreasing = T))
+sm<-do.call(data.table,sm)
+setnames(sm,paste0('h',ncol(sm):1))
+sm[,cr:=cgr$names]
+sm[,m:=as.integer(h1)] %>% setkey(m)
+```
+
