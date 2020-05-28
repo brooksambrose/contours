@@ -63,6 +63,7 @@ if(file.exists(f)){
 }
 rm(f)
 attributes(dbl2bel)$results
+dbl2bel<-dbl2bel[!(pend|loop),.(ut,cr)]
 ```
 
 # Unimodal edgelist
@@ -72,7 +73,7 @@ f<-'d/p/bel2mel.RData'
 if(file.exists(f)){
   load(f)
 } else {
-  bel2mel<-plagiat::bel2mel.f(dbl2bel[!(pend|loop),.(ut,cr)],type = 'crel',out = dirname(f))
+  bel2mel<-plagiat::bel2mel.f(dbl2bel,type = 'crel',out = dirname(f))
   # trim edges where weight = 1
   
   save(bel2mel,file=f)
