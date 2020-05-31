@@ -7,8 +7,10 @@ knitr::opts_chunk$set(
   ,include=F
 )
 library(tilit);library(magrittr)
-'data.table' %>% ec %>% sapply(library,character.only = T) %>% invisible # load packages
-data.table::setDTthreads(percent=75) # give data.table access to more than 50% cores
+'data.table,disk.frame' %>% ec %>% sapply(library,character.only = T) %>% invisible # load packages
+data.table::setDTthreads(percent=25) # binder limits combined cpu load to 1 core's worth, so core use should be discounted
+nc<-data.table::getDTthreads() # for functions asking for number of cores
+{DF<-T;if(DF) {setup_disk.frame();options(future.globals.maxSize = Inf)}} # set up disk frame
 if(!dir.exists('d')) system('mkdir d && (cd d && mkdir q d p b)') # create data directory structure if it doesn't exist
 ```
 # Import WOK Data
@@ -26,6 +28,19 @@ if(file.exists(f)){
 }
 wok2dbl<-unique(wok2dbl)
 rm(f)
+```
+
+```{r disk.frame-test}
+wok2dfl<-as.disk.frame(wok2dbl)
+mb<-microbenchmark::microbenchmark(wok2dbl['CR',on='field',.N,by=val],wok2dfl['CR',on='field',.N,by=val,keep=ec('field,val')],times=10)
+pf<-profvis::profvis({
+
+  wok2dbl['CR',on='field',.N,by=val]  
+  
+  wok2dfl['CR',on='field',.N,by=val,keep=ec('field,val')]
+  
+})
+pf
 ```
 
 <!--
@@ -66,6 +81,10 @@ rm(f)
 attributes(dbl2bel)$results
 rm(wok2dbl)
 dbl2bel<-unique(dbl2bel[!(pend|loop),.(ut,cr)]) %>% setkey(ut,cr)
+if(DF) {
+  dfl2bel<-as.disk.frame(dbl2bel)
+#rm(dbl2bel)
+}
 ```
 
 # Unimodal edgelist
@@ -76,21 +95,28 @@ if(file.exists(f)){
   load(f)
 } else {
   #bel2mel<-plagiat::bel2mel.f(dbl2bel,type = 'crel',out = dirname(f))
-  # trim edges where weight = 1
   bel2mel<-list()
   bel2mel$crel<-pbapply::pblapply(
     split(unique(dbl2bel)[,.(ut=ut %>% unique,batch=1:ceiling((ut %>% unique %>% length)/100))][,.(ut,batch=sort(batch))],by = 'batch',keep.by = F)
     ,function(x) dbl2bel[x,data.table(do.call(rbind,lapply(1:(length(cr) - 1), function(y) matrix(cr[c(rep(y,length(cr) - y), (y + 1):length(cr))], ncol = 2)))),by = ut]
-    ,cl=1
+    ,cl=nc
   )
+  bel2mel$crel %<>% rbindlist %>% setnames(old=c('V1','V2'),new=c('cr1','cr2'))
+  bel2mel$crel %<>% {.[,.(ew =.N,ut=list(ut)),keyby=.(cr1,cr2)]}
+  # trim edges where weight = 1
+  new1<-bel2mel$crel[.(1),on='ew'][,.N]
+  bel2mel$crel %<>% .[!.(1),on='ew']
+  attr(bel2mel$crel,'results')<-data.table(case=c('ew==1','ew>=2'),N=c(new1,bel2mel$crel[,.N]))[,prop:=N/sum(N)]
   save(bel2mel,file=f)
-  # bel2mel$crel %<>% rbindlist %>% setnames(old=c('V1','V2'),new=c('cr1','cr2'))
-  # save(bel2mel,file=f)
-  # bel2mel$crel %<>%  {.[,.(ew =.N,ut=list(ut)),keyby=.(cr1,cr2)]}
-  # save(bel2mel,file=f)
-  browseURL('https://hub.gke.mybinder.org/user/brooksambrose-contours-kaohkdmk/rstudio/export/bel2mel.RData?name=bel2mel.RData&file=~%2Fd%2Fp%2Fbel2mel.RData')
+  #browseURL('https://hub.gke.mybinder.org/user/brooksambrose-contours-p6m7z449/rstudio/export/bel2mel.RData?name=bel2mel.RData&file=~%2Fd%2Fp%2Fbel2mel.RData')
 }
 rm(f)
+if(DF) {
+  dfbel2mel<-as.disk.frame(bel2mel$crel[,!'ut'])
+  attr(dfbel2mel,'results')<-attributes(bel2mel$crel)$results
+#rm(dbl2bel)
+}
+
 ```
 
 <!--
