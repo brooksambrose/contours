@@ -8,8 +8,9 @@ knitr::opts_chunk$set(
 )
 library(tilit);library(magrittr)
 'data.table,disk.frame' %>% ec %>% sapply(library,character.only = T) %>% invisible # load packages
-data.table::setDTthreads(percent=25) # binder limits combined cpu load to 1 core's worth, so core use should be discounted
-nc<-data.table::getDTthreads() # for functions asking for number of cores
+setDTthreads(percent=25) # binder limits combined cpu load to 1 core's worth, so core use should be discounted
+if(parallel::detectCores()>1&getDTthreads()==1) setDTthreads(threads=2)
+nc<-getDTthreads() # for functions asking for number of cores
 {DF<-T;if(DF) {setup_disk.frame();options(future.globals.maxSize = Inf)}} # set up disk frame
 if(!dir.exists('d')) system('mkdir d && (cd d && mkdir q d p b)') # create data directory structure if it doesn't exist
 ```
@@ -28,22 +29,22 @@ if(file.exists(f)){
 }
 wok2dbl<-unique(wok2dbl)
 rm(f)
+if(DF) wok2dfl<-as.disk.frame(wok2dbl)
 ```
 
+<!--
 ```{r disk.frame-test}
-wok2dfl<-as.disk.frame(wok2dbl)
 mb<-microbenchmark::microbenchmark(wok2dbl['CR',on='field',.N,by=val],wok2dfl['CR',on='field',.N,by=val,keep=ec('field,val')],times=10)
 pf<-profvis::profvis({
 
-  wok2dbl['CR',on='field',.N,by=val]  
-  
-  wok2dfl['CR',on='field',.N,by=val,keep=ec('field,val')]
-  
+wok2dbl['CR',on='field',.N,by=val]
+
+wok2dfl['CR',on='field',.N,by=val,keep=ec('field,val')]
+
 })
 pf
 ```
 
-<!--
 ## WOK Descriptives
 
 ```{r descriptive}
@@ -83,7 +84,7 @@ rm(wok2dbl)
 dbl2bel<-unique(dbl2bel[!(pend|loop),.(ut,cr)]) %>% setkey(ut,cr)
 if(DF) {
   dfl2bel<-as.disk.frame(dbl2bel)
-#rm(dbl2bel)
+  #rm(dbl2bel)
 }
 ```
 
@@ -94,19 +95,43 @@ f<-'d/p/bel2mel.RData'
 if(file.exists(f)){
   load(f)
 } else {
+  dbl2bel[,`:=`(ut=factor(ut),cr=factor(cr))] %>% setkey(ut,cr)
+  lut<-gzfile(paste(dirname(f),'bel2mel-ut-levs.txt.gz',sep=.Platform$file.sep),'w')
+  writeLines(dbl2bel[,levels(ut)],lut)
+  lcr<-gzfile(paste(dirname(f),'bel2mel-cr-levs.txt.gz',sep=.Platform$file.sep),'w')
+  writeLines(dbl2bel[,levels(cr)],lcr)
+  
   #bel2mel<-plagiat::bel2mel.f(dbl2bel,type = 'crel',out = dirname(f))
   bel2mel<-list()
+  sub('$','.txt',f) %>% {if(file.exists(.)) stop(sprintf('Remove %s before writing new lines.',.))}
   bel2mel$crel<-pbapply::pblapply(
-    split(unique(dbl2bel)[,.(ut=ut %>% unique,batch=1:ceiling((ut %>% unique %>% length)/100))][,.(ut,batch=sort(batch))],by = 'batch',keep.by = F)
-    ,function(x) dbl2bel[x,data.table(do.call(rbind,lapply(1:(length(cr) - 1), function(y) matrix(cr[c(rep(y,length(cr) - y), (y + 1):length(cr))], ncol = 2)))),by = ut]
+    split(suppressWarnings(dbl2bel[,.(ut=ut %>% unique,batch=1:ceiling((ut %>% unique %>% length)/100))])[,.(ut,batch=sort(batch))],by = 'batch',keep.by = F)
+    ,function(x) {
+      r<-dbl2bel[x,.(ut=as.integer(ut),cr=as.integer(cr))][,data.table(do.call(rbind,lapply(1:(length(cr) - 1), function(y) matrix(cr[c(rep(y,length(cr) - y), (y + 1):length(cr))], ncol = 2)))),by = ut] %>% setnames(old=c('V1','V2'),new=c('cr1','cr2'))
+      if(DF) fwrite(x = r,file = sub('$','.txt',f),append=T,quote = F,sep = '\t',nThread = 1) else r
+    }
     ,cl=nc
   )
-  bel2mel$crel %<>% rbindlist %>% setnames(old=c('V1','V2'),new=c('cr1','cr2'))
-  bel2mel$crel %<>% {.[,.(ew =.N,ut=list(ut)),keyby=.(cr1,cr2)]}
-  # trim edges where weight = 1
-  new1<-bel2mel$crel[.(1),on='ew'][,.N]
-  bel2mel$crel %<>% .[!.(1),on='ew']
-  attr(bel2mel$crel,'results')<-data.table(case=c('ew==1','ew>=2'),N=c(new1,bel2mel$crel[,.N]))[,prop:=N/sum(N)]
+  sub('$','.txt',f) %>% {
+    if(DF) {zip(zipfile = {z<-sub('$','.zip',.);z},files = .);file.remove(.)}
+    dfbel2mel<-zip_to_disk.frame(zipfile = z,outdir = '.',nchunks=nc*4,shardby=ec('cr1,cr2'))[[1]]
+    bel2mel<-dfbel2mel[,.(ew =.N,ut=list(ut)),keyby=.(cr1,cr2)]
+    nr<-nrow(bel2mel)
+    cr1n<-bel2mel[,sum(is.na(cr1))]
+    cr2n<-bel2mel[,sum(is.na(cr2))]
+    iso<-sum(cr1n,cr2n)
+    new1<-bel2mel[.(1),on='ew'][,.N]
+    bel2mel %<>% .[!.(1),on='ew']
+    attr(bel2mel,'results')<-data.table(case=c('ew==1','ew>=2'),N=c(new1,nrow(bel2mel)))[,prop:=N/sum(N)]
+  } 
+  if(!DF){
+    bel2mel$crel %<>% rbindlist %>% setnames(old=c('V1','V2'),new=c('cr1','cr2'))
+    bel2mel$crel %<>% {.[,.(ew =.N,ut=list(ut)),keyby=.(cr1,cr2)]}
+    # trim edges where weight = 1
+    new1<-bel2mel$crel[.(1),on='ew'][,.N]
+    bel2mel$crel %<>% .[!.(1),on='ew']
+    attr(bel2mel$crel,'results')<-data.table(case=c('ew==1','ew>=2'),N=c(new1,bel2mel$crel[,.N]))[,prop:=N/sum(N)]
+  }
   save(bel2mel,file=f)
   #browseURL('https://hub.gke.mybinder.org/user/brooksambrose-contours-p6m7z449/rstudio/export/bel2mel.RData?name=bel2mel.RData&file=~%2Fd%2Fp%2Fbel2mel.RData')
 }
@@ -114,7 +139,7 @@ rm(f)
 if(DF) {
   dfbel2mel<-as.disk.frame(bel2mel$crel[,!'ut'])
   attr(dfbel2mel,'results')<-attributes(bel2mel$crel)$results
-#rm(dbl2bel)
+  #rm(dbl2bel)
 }
 
 ```
