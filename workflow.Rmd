@@ -11,6 +11,7 @@ library(tilit);library(magrittr)
 setDTthreads(percent=25) # binder limits combined cpu load to 1 core's worth, so core use should be discounted
 if(parallel::detectCores()>1&getDTthreads()==1) setDTthreads(threads=2)
 nc<-getDTthreads() # for functions asking for number of cores
+nchnk<-nc*2^3
 {DF<-T;if(DF) {setup_disk.frame();options(future.globals.maxSize = Inf)}} # set up disk frame
 if(!dir.exists('d')) system('mkdir d && (cd d && mkdir q d p b)') # create data directory structure if it doesn't exist
 ```
@@ -33,18 +34,6 @@ if(DF) wok2dfl<-as.disk.frame(wok2dbl)
 ```
 
 <!--
-```{r disk.frame-test}
-mb<-microbenchmark::microbenchmark(wok2dbl['CR',on='field',.N,by=val],wok2dfl['CR',on='field',.N,by=val,keep=ec('field,val')],times=10)
-pf<-profvis::profvis({
-
-wok2dbl['CR',on='field',.N,by=val]
-
-wok2dfl['CR',on='field',.N,by=val,keep=ec('field,val')]
-
-})
-pf
-```
-
 ## WOK Descriptives
 
 ```{r descriptive}
@@ -114,7 +103,7 @@ if(file.exists(f)){
   )
   sub('$','.txt',f) %>% {
     if(DF) {zip(zipfile = {z<-sub('$','.zip',.);z},files = .);file.remove(.)}
-    dfbel2mel<-zip_to_disk.frame(zipfile = z,outdir = '.',nchunks=nc*4,shardby=ec('cr1,cr2'))[[1]]
+    dfbel2mel<-zip_to_disk.frame(zipfile = z,outdir = '.',nchunks=nchnk,shardby=ec('cr1,cr2'))[[1]]
     bel2mel<-dfbel2mel[,.(ew =.N,ut=list(ut)),keyby=.(cr1,cr2)]
     nr<-nrow(bel2mel)
     cr1n<-bel2mel[,sum(is.na(cr1))]
