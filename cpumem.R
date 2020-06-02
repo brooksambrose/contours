@@ -9,10 +9,10 @@ binPower <- 20
 binUnit <- "Gb"
 
 if(!dir.exists('GorjancShell')) system("git clone https://github.com/gregorgorjanc/GorjancShell")
-if(!file.exists('start')) system('touch start &&  bash GorjancShell/cpumemlog 1',wait = F)
+if(!file.exists('start')) system('touch start &&  bash GorjancShell/cpumemlog 1',wait = F);Sys.sleep(5)
 
 cpulim<-Sys.getenv('CPU_LIMIT') %>% as.numeric %>%  `*`(100)
-memlim<-Sys.getenv('MEM_LIMIT') %>% as.numeric %>% {./binPower^2}
+memlim<-Sys.getenv('MEM_LIMIT') %>% as.numeric %>% {./2^30}
 
 cm<-fread('cpumemlog_1.txt',fill=T)[
   ,.(pcu=sum(PCPU),gbm=sum(RSS)/2^binPower),by=.(DATE,TIME,PID,COMMAND)][
@@ -22,7 +22,7 @@ k<-cm[,.(gbM=max(gbm),t=max(t),pcU=max(pcu)),keyby=PID] %>% setorder(-gbM)
 
 {tthr<-
   30 %>% {lubridate::now()-minutes(.)+hours(5)}
-cm[k[t>=tthr][c(order(gbM,decreasing=T)[1:5],order(pcU,decreasing=T)[1:5]) %>% unique %>% head(10),PID]][
+p<-cm[k[t>=tthr][c(order(gbM,decreasing=T)[1:5],order(pcU,decreasing=T)[1:5]) %>% unique %>% head(10),PID]][
   t>=tthr
   ,
   {ggplot(data=.SD,aes(x=t,color=PID)) + xlab(NULL)} %>% {list(
@@ -47,3 +47,5 @@ cm[k[t>=tthr][c(order(gbM,decreasing=T)[1:5],order(pcU,decreasing=T)[1:5]) %>% u
 
 
 }
+p
+ggsave('res.png',p,width=288/72,height=1400/72,dpi=72)
