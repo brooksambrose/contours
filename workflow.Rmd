@@ -2,18 +2,21 @@
 #stop('Don\'t run me dummy')
 #rm(list=ls()) # clear workspace
 cat('\014') # clear console
+'cpumem.R' %>% {if(file.exists(.)) sprintf("Rscript -e \"source(\'%s\')\"",.)} %>% system(wait = F)
 knitr::opts_chunk$set(
   eval=T
   ,include=F
 )
 library(tilit);library(magrittr)
-'data.table,disk.frame' %>% ec %>% sapply(library,character.only = T) %>% invisible # load packages
+'data.table,disk.frame,ggplot2' %>% ec %>% sapply(library,character.only = T) %>% invisible # load packages
 setDTthreads(percent=25) # binder limits combined cpu load to 1 core's worth, so core use should be discounted
 if(parallel::detectCores()>1&getDTthreads()==1) setDTthreads(threads=2)
 nc<-getDTthreads() # for functions asking for number of cores
 nchnk<-nc*2^3
 {DF<-T;if(DF) {setup_disk.frame();options(future.globals.maxSize = Inf)}} # set up disk frame
 if(!dir.exists('d')) system('mkdir d && (cd d && mkdir q d p b)') # create data directory structure if it doesn't exist
+binder<-Sys.getenv('CPU_LIMIT') %>% as.numeric %>% is.na %>% `!`
+''->hash
 ```
 # Import WOK Data
 
@@ -67,14 +70,53 @@ if(file.exists(f)){
   dbl2bel<-plagiat::dbl2bel.f(wok2dbl,out=dirname(f),trim_doi = T,trim_anon = T,trim_loops = T,capitalize = T,trim_pendants = T) %>% invisible
   save(dbl2bel,file=f)
 }
-rm(f)
-attributes(dbl2bel)$results
 rm(wok2dbl)
+r<-attributes(dbl2bel)$results
 dbl2bel<-unique(dbl2bel[!(pend|loop),.(ut,cr)]) %>% setkey(ut,cr)
+dbl2bel[,`:=`(ut=factor(ut),cr=factor(cr))] %>% setkey(ut,cr)
+lut<-gzfile(paste(dirname(f),'bel2mel-ut-levs.txt.gz',sep=.Platform$file.sep),'w')
+writeLines(dbl2bel[,levels(ut)],lut)
+lcr<-gzfile(paste(dirname(f),'bel2mel-cr-levs.txt.gz',sep=.Platform$file.sep),'w')
+writeLines(dbl2bel[,levels(cr)],lcr)
+dbl2bel[,ut:=as.integer(ut)][,cr:=as.integer(cr)] %>% setkey(ut,cr)
+
 if(DF) {
-  dfl2bel<-as.disk.frame(dbl2bel)
-  #rm(dbl2bel)
+  dfl2bel<-as.disk.frame(dbl2bel,nchunks = nchnk,shardby = 'ut')
+  attr(dfl2bel,'results')<-r
+  rm(dbl2bel)
 }
+r
+rm(f,r)
+```
+
+<!--
+```{r memtest}
+f<-'d/q/memtest.RData'
+if(F) if(file.exists(f)){
+  load(f)
+  ggplot(data=mt,aes(y=byt,x=ix)) + geom_jitter(aes(color=factor(ix)) )+ scale_x_log10()  + scale_y_continuous(trans='log2') + geom_smooth(method = 'lm',formula=y~poly(x,2))
+} else {
+  mt<-list()
+  setkey(dbl2bel,ut,cr)
+  for(ix in 10^(1:4)) mt[[as.character(ix)]]<-data.table(
+    ix=ix,byt=
+      pbapply::pbreplicate(
+        n = 100,
+        object.size(
+          dbl2bel[sample(ut,ix),data.table(do.call(rbind,lapply(1:(length(cr) - 1), function(y) matrix(cr[c(rep(y,length(cr) - y), (y + 1):length(cr))], ncol = 2)))),by = ut] %>% setnames(old=c('V1','V2'),new=c('cr1','cr2'))
+        )
+        ,simplify = T,cl=2)
+  )
+  mt<-rbindlist(mt)
+  save(mt,file=f)
+}
+rm(f)
+```
+-->
+
+```{r cpumem2}
+'cpumem.R' %>% {if(file.exists(.)) sprintf("Rscript -e \"source(\'%s\')\"",.)} %>% system(wait = F)
+if(binder) if(interactive()) browseURL(sprintf('https://hub.gke.mybinder.org/user/brooksambrose-contours-%s/rstudio/export/cpumem.png?name=cpumem.png&file=~cpumem.png',hash))
 ```
 
 # Unimodal edgelist
@@ -84,23 +126,22 @@ f<-'d/p/bel2mel.RData'
 if(file.exists(f)){
   load(f)
 } else {
-  dbl2bel[,`:=`(ut=factor(ut),cr=factor(cr))] %>% setkey(ut,cr)
-  lut<-gzfile(paste(dirname(f),'bel2mel-ut-levs.txt.gz',sep=.Platform$file.sep),'w')
-  writeLines(dbl2bel[,levels(ut)],lut)
-  lcr<-gzfile(paste(dirname(f),'bel2mel-cr-levs.txt.gz',sep=.Platform$file.sep),'w')
-  writeLines(dbl2bel[,levels(cr)],lcr)
   
   #bel2mel<-plagiat::bel2mel.f(dbl2bel,type = 'crel',out = dirname(f))
   bel2mel<-list()
   sub('$','.txt',f) %>% {if(file.exists(.)) stop(sprintf('Remove %s before writing new lines.',.))}
-  bel2mel$crel<-pbapply::pblapply(
-    split(suppressWarnings(dbl2bel[,.(ut=ut %>% unique,batch=1:ceiling((ut %>% unique %>% length)/100))])[,.(ut,batch=sort(batch))],by = 'batch',keep.by = F)
-    ,function(x) {
-      r<-dbl2bel[x,.(ut=as.integer(ut),cr=as.integer(cr))][,data.table(do.call(rbind,lapply(1:(length(cr) - 1), function(y) matrix(cr[c(rep(y,length(cr) - y), (y + 1):length(cr))], ncol = 2)))),by = ut] %>% setnames(old=c('V1','V2'),new=c('cr1','cr2'))
-      if(DF) fwrite(x = r,file = sub('$','.txt',f),append=T,quote = F,sep = '\t',nThread = 1) else r
-    }
-    ,cl=nc
-  )
+  if(DF) {
+    
+  } else {
+    bel2mel$crel<-pbapply::pblapply(
+      split(suppressWarnings(dbl2bel[,.(ut=ut %>% unique,batch=1:ceiling((ut %>% unique %>% length)/100))])[,.(ut,batch=sort(batch))],by = 'batch',keep.by = F)
+      ,function(x) {
+        r<-dbl2bel[x,data.table(do.call(rbind,lapply(1:(length(cr) - 1), function(y) matrix(cr[c(rep(y,length(cr) - y), (y + 1):length(cr))], ncol = 2)))),by = ut] %>% setnames(old=c('V1','V2'),new=c('cr1','cr2'))
+        if(DF) fwrite(x = r,file = sub('$','.txt',f),append=T,quote = F,sep = '\t',nThread = 1) else r
+      }
+      ,cl=nc
+    )
+  }
   sub('$','.txt',f) %>% {
     if(DF) {zip(zipfile = {z<-sub('$','.zip',.);z},files = .);file.remove(.)}
     dfbel2mel<-zip_to_disk.frame(zipfile = z,outdir = '.',nchunks=nchnk,shardby=ec('cr1,cr2'))[[1]]
@@ -130,6 +171,11 @@ if(DF) {
   attr(dfbel2mel,'results')<-attributes(bel2mel$crel)$results
   #rm(dbl2bel)
 }
+
+```
+
+```{r cpumem3}
+'cpumem.R' %>% {if(file.exists(.)) sprintf("Rscript -e \"source(\'%s\')\"",.)} %>% system(wait = F)
 
 ```
 
