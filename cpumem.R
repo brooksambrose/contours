@@ -8,7 +8,7 @@ graphics.off()
 binPower <- 20
 binUnit <- "Gb"
 
-if(!dir.exists('GorjancShell')) system("git clone https://github.com/gregorgorjanc/GorjancShell")
+if(!dir.exists('GorjancShell')) system("git clone https://github.com/gregorgorjanc/GorjancShell && sed -i 's/ETIME\\ COMMAND/ETIME\\ COMMAND\\ 1\\ 2\\ 3/g' GorjancShell/cpumemlog")
 if(!file.exists('start')) system('touch start &&  bash GorjancShell/cpumemlog 1',wait = F);Sys.sleep(5)
 
 cpulim<-Sys.getenv('CPU_LIMIT') %>% as.numeric %>%  `*`(100)

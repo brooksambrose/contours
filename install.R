@@ -8,6 +8,7 @@ devtools::install_github('brooksambrose/pack-dev',subdir = 'plagiat',Ncpus=nc)
 if(!require(magrittr)) {install.packages('magrittr',Ncpus=nc);library(magrittr)}
 tilit::ec(
 'data.table
+RSelenium
 doBy
 microbenchmark
 disk.frame

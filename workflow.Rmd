@@ -8,23 +8,19 @@ knitr::opts_chunk$set(
 )
 library(tilit);library(magrittr)
 'data.table,disk.frame,ggplot2' %>% ec %>% sapply(library,character.only = T) %>% invisible # load packages
-
-
-setDTthreads(percent=25) # binder limits combined cpu load to 1 core's worth, so core use should be discounted
+setDTthreads(percent=2) # binder limits combined cpu load to 1 core's worth, so core use should be discounted
 #if(parallel::detectCores()>1&getDTthreads()==1) setDTthreads(threads=2)
 nc<-getDTthreads() # for functions asking for number of cores
 nchnk<-nc*2^3
 {DF<-T;if(DF) {setup_disk.frame();options(future.globals.maxSize = Inf)}} # set up disk frame
 if(!dir.exists('d')) system('mkdir d && (cd d && mkdir q d p b)') # create data directory structure if it doesn't exist
-binder<-Sys.getenv('CPU_LIMIT') %>% as.numeric %>% is.na %>% `!`
-'vxtywstq'->hash
-cpumem<-function(bnd=binder,hsh=hash) {
-  # 'cpumem.R' %>% {if(file.exists(.)) sprintf("Rscript -e \"suppressPackageStartupMessages(source(\'%s\'))\"",.)} %>% system(wait = F)
-  # Sys.sleep(2)
-  # if(bnd) if(interactive()) {
-  #   browseURL(sprintf('https://hub.gke.mybinder.org/user/brooksambrose-contours-%s/rstudio/export/cpumem.png?name=cpumem.png&file=~%%2Fcpumem.png',hsh))
-  #   browseURL(sprintf('https://hub.gke.mybinder.org/user/brooksambrose-contours-%s/rstudio/files/cpumem.png',hsh))
-  # }
+cpumem<-function(plot=T) {
+  'cpumem.R' %>% {if(file.exists(.)) sprintf("Rscript -e \"suppressPackageStartupMessages(source(\'%s\'))\"",.)} %>% system(wait = F)
+  if(plot) Sys.getenv('RSTUDIO_HTTP_REFERER') %>% {if(.!='') if(interactive()) {
+    Sys.sleep(2)
+    browseURL(sprintf('%sexport/cpumem.png?name=cpumem.png&file=~%%2Fcpumem.png',.))
+    browseURL(sprintf('%sfiles/cpumem.png',.))
+  }}
 }
 cpumem(F)
 ```
@@ -47,7 +43,7 @@ if(DF) wok2dfl<-as.disk.frame(wok2dbl)
 ```
 
 ```{r cpumem1}
-cpumem(F)
+cpumem(T)
 ```
 
 <!--
@@ -130,7 +126,7 @@ rm(f)
 -->
 
 ```{r cpumem2}
-cpumem(F)
+cpumem(T)
 ```
 
 # Unimodal edgelist
@@ -139,18 +135,20 @@ cpumem(F)
 f<-'d/p/bel2mel.RData'
 if(file.exists(f)){
   load(f)
-} else {
+} else 
+{
   #bel2mel<-plagiat::bel2mel.f(dbl2bel,type = 'crel',out = dirname(f))
   bel2mel<-list()
-  sub('$','.txt',f) %>% {if(file.exists(.)) stop(sprintf('Remove %s before writing new lines.',.))}
+  sub('$','.txt',f) %>% {if(file.exists(.)) {file.remove(.);warning(sprintf('Removed %s before writing new lines.',.))}}
   if(DF) {
-    cat('\n Starting dfl2bel -> bel2mel...')
+    cat('\nStarting dfl2bel -> bel2mel.RData.txt.')
     dfl2bel[
       ,data.table(ut=ut,do.call(what='rbind',lapply(1:(length(cr) - 1), function(y) matrix(cr[c(rep(y,length(cr) - y), (y + 1):length(cr))], ncol = 2)))) %>% setnames(old=c('V1','V2'),new=c('cr1','cr2')) %>% 
         fwrite(file = sub('$','.txt',f),append=T,quote = F,sep = '\t',nThread = 1)
       ,by = ut]
-    cat('Finished.')
-  } else {
+    cat(' Finished.')
+  } else
+  {
     bel2mel$crel<-pbapply::pblapply(
       split(suppressWarnings(dbl2bel[,.(ut=ut %>% unique,batch=1:ceiling((ut %>% unique %>% length)/100))])[,.(ut,batch=sort(batch))],by = 'batch',keep.by = F)
       ,function(x) {
@@ -166,47 +164,56 @@ if(file.exists(f)){
     if(DF) {zip(zipfile = {z<-sub('$','.zip',ft);z},files = ft);file.remove(ft)}
     dfbel2mel<-zip_to_disk.frame(zipfile = z,outdir = '.',nchunks=nchnk,shardby=ec('cr1,cr2'))[[1]]
   }
-  
-    dfbel2mel<-csv_to_disk.frame(
-      infile=ft
+  cat('\nStarting bel2mel.RData.txt -> dfbel2mel.')
+  dfbel2mel<-csv_to_disk.frame(
+    infile=ft
     #  ,outdir = '~/d/p/bel2mel.df' %>% path.expand %>% {dir.create(.);.}
-      ,chunk_reader = 'data.table'
-      ,nchunks=nchnk
-      ,shardby=ec('cr1,cr2')
-    )#[[1]]
-  
-  
-  bel2mel<-dfbel2mel[,.(ew =.N,ut=list(ut)),keyby=.(cr1,cr2)]
-  nr<-nrow(bel2mel)
-  cr1n<-bel2mel[,sum(is.na(cr1))]
-  cr2n<-bel2mel[,sum(is.na(cr2))]
-  iso<-sum(cr1n,cr2n)
-  new1<-bel2mel[.(1),on='ew'][,.N]
-  bel2mel %<>% .[!.(1),on='ew']
-  attr(bel2mel,'results')<-data.table(case=c('ew==1','ew>=2'),N=c(new1,nrow(bel2mel)))[,prop:=N/sum(N)]
-  
-  if(!DF){
-    bel2mel$crel %<>% rbindlist %>% setnames(old=c('V1','V2'),new=c('cr1','cr2'))
-    bel2mel$crel %<>% {.[,.(ew =.N,ut=list(ut)),keyby=.(cr1,cr2)]}
-    # trim edges where weight = 1
-    new1<-bel2mel$crel[.(1),on='ew'][,.N]
-    bel2mel$crel %<>% .[!.(1),on='ew']
-    attr(bel2mel$crel,'results')<-data.table(case=c('ew==1','ew>=2'),N=c(new1,bel2mel$crel[,.N]))[,prop:=N/sum(N)]
-  }
-  save(bel2mel,file=f)
-  #browseURL('https://hub.gke.mybinder.org/user/brooksambrose-contours-p6m7z449/rstudio/export/bel2mel.RData?name=bel2mel.RData&file=~%2Fd%2Fp%2Fbel2mel.RData')
+    ,chunk_reader = 'data.table'
+    ,nchunks=nchnk
+    ,shardby=ec('cr1,cr2')
+  )#[[1]]
+  cat(' Finished.')
+  file.remove('d/p/bel2mel-ew1.txt.gz')
+  file.remove('d/p/bel2mel-ew2.txt.gz')
+  cat('\nStarting dfbel2mel -> bel2mel-ew1.txt.gz.')
+  dfbel2mel[,
+            .SD[,.(ew =.N,ut=list(ut)),keyby=.(cr1,cr2)] %>% setkey(ew) %>% {
+              .[.(1)] %>% fwrite('d/p/bel2mel-ew1.txt.gz',sep = '\t',sep2=c('"',',','"'),append=T)
+              .[!.(1)] %>% fwrite('d/p/bel2mel-ew2.txt.gz',sep = '\t',sep2=c('"',',','"'),append=T)
+            }
+            ]
+  cat(' Finished.')
+  # bel2mel<-dfbel2mel[,.(ew =.N,ut=list(ut)),keyby=.(cr1,cr2)]
+  # nr<-nrow(bel2mel)
+  # cr1n<-bel2mel[,sum(is.na(cr1))]
+  # cr2n<-bel2mel[,sum(is.na(cr2))]
+  # iso<-sum(cr1n,cr2n)
+  # new1<-bel2mel[.(1),on='ew'][,.N]
+  # bel2mel %<>% .[!.(1),on='ew']
+  # attr(bel2mel,'results')<-data.table(case=c('ew==1','ew>=2'),N=c(new1,nrow(bel2mel)))[,prop:=N/sum(N)]
+  # 
+  # if(!DF){
+  #   bel2mel$crel %<>% rbindlist %>% setnames(old=c('V1','V2'),new=c('cr1','cr2'))
+  #   bel2mel$crel %<>% {.[,.(ew =.N,ut=list(ut)),keyby=.(cr1,cr2)]}
+  #   # trim edges where weight = 1
+  #   new1<-bel2mel$crel[.(1),on='ew'][,.N]
+  #   bel2mel$crel %<>% .[!.(1),on='ew']
+  #   attr(bel2mel$crel,'results')<-data.table(case=c('ew==1','ew>=2'),N=c(new1,bel2mel$crel[,.N]))[,prop:=N/sum(N)]
+  # }
+  # save(bel2mel,file=f)
+  # #browseURL('https://hub.gke.mybinder.org/user/brooksambrose-contours-p6m7z449/rstudio/export/bel2mel.RData?name=bel2mel.RData&file=~%2Fd%2Fp%2Fbel2mel.RData')
 }
 rm(f)
-if(DF) {
-  dfbel2mel<-as.disk.frame(bel2mel$crel[,!'ut'])
-  attr(dfbel2mel,'results')<-attributes(bel2mel$crel)$results
-  #rm(dbl2bel)
-}
+# if(DF) {
+#   dfbel2mel<-as.disk.frame(bel2mel$crel[,!'ut'])
+#   attr(dfbel2mel,'results')<-attributes(bel2mel$crel)$results
+#   #rm(dbl2bel)
+# }
 
 ```
 
 ```{r cpumem3}
-cpumem(F)
+cpumem(T)
 ```
 
 <!--
