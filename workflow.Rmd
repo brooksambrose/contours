@@ -24,6 +24,7 @@ cpumem<-function(plot=T) {
 }
 cpumem(F)
 ```
+
 # Import WOK Data
 
 ```{r wok2dbl}
@@ -40,35 +41,8 @@ if(file.exists(f)){
 wok2dbl<-unique(wok2dbl)
 rm(f)
 if(DF) wok2dfl<-as.disk.frame(wok2dbl)
-```
-
-```{r cpumem1}
 cpumem(T)
 ```
-
-<!--
-## WOK Descriptives
-
-```{r descriptive}
-nut<-wok2dbl[,id %>% unique %>% length]
-n<-wok2dbl['CR',on='field',.N,by=val][,table(N)] %>% {data.table(N=as.integer(names(.)),nn=as.integer(.))}
-n[,cs:=cumsum(nn)]
-n[,cp:=round(cs/max(cs),4)]
-n[,rcs:=cumsum(nn %>% rev)]
-n[rcs>=180542]
-n
-n[,rcs:=NULL]
-n
-n %>% setorder(-N)
-n
-n[,rcs:=cumsum(nn)]
-n
-n[rcs>=180542]
-n[rcs<180542]
-wok2dbl['CR',on='field',unique(val) %>% length]
-
-```
--->
 
 # Bimodal edge list
 
@@ -98,48 +72,19 @@ if(DF) {
 }
 r
 rm(f,r)
-```
-
-<!--
-```{r memtest}
-f<-'d/q/memtest.RData'
-if(F) if(file.exists(f)){
-load(f)
-ggplot(data=mt,aes(y=byt,x=ix)) + geom_jitter(aes(color=factor(ix)) )+ scale_x_log10()  + scale_y_continuous(trans='log2') + geom_smooth(method = 'lm',formula=y~poly(x,2))
-} else {
-mt<-list()
-setkey(dbl2bel,ut,cr)
-for(ix in 10^(1:4)) mt[[as.character(ix)]]<-data.table(
-ix=ix,byt=
-pbapply::pbreplicate(
-n = 100,
-object.size(
-dbl2bel[sample(ut,ix),data.table(do.call(rbind,lapply(1:(length(cr) - 1), function(y) matrix(cr[c(rep(y,length(cr) - y), (y + 1):length(cr))], ncol = 2)))),by = ut] %>% setnames(old=c('V1','V2'),new=c('cr1','cr2'))
-)
-,simplify = T,cl=2)
-)
-mt<-rbindlist(mt)
-save(mt,file=f)
-}
-rm(f)
-```
--->
-
-```{r cpumem2}
 cpumem(T)
 ```
 
 # Unimodal edgelist
 
-```{r bel2mel}
-f<-'d/p/bel2mel.RData'
+```{r dfbel2mel}
+f<-'d/p/bel2mel.RData.txt'
 if(file.exists(f)){
-  load(f)
+  warning(sprintf('%s already exists. Manually delete to replace.',f))
 } else 
 {
   #bel2mel<-plagiat::bel2mel.f(dbl2bel,type = 'crel',out = dirname(f))
-  bel2mel<-list()
-  sub('$','.txt',f) %>% {if(file.exists(.)) {file.remove(.);warning(sprintf('Removed %s before writing new lines.',.))}}
+  f %>% {if(file.exists(.)) {file.remove(.);warning(sprintf('Removed %s before writing new lines.',.))}}
   if(DF) {
     cat('\nStarting dfl2bel -> bel2mel.RData.txt.')
     dfl2bel[
@@ -149,70 +94,58 @@ if(file.exists(f)){
     cat(' Finished.')
   } else
   {
+    bel2mel<-list()
     bel2mel$crel<-pbapply::pblapply(
       split(suppressWarnings(dbl2bel[,.(ut=ut %>% unique,batch=1:ceiling((ut %>% unique %>% length)/100))])[,.(ut,batch=sort(batch))],by = 'batch',keep.by = F)
       ,function(x) {
         r<-dbl2bel[x,data.table(do.call(rbind,lapply(1:(length(cr) - 1), function(y) matrix(cr[c(rep(y,length(cr) - y), (y + 1):length(cr))], ncol = 2)))),by = ut] %>% setnames(old=c('V1','V2'),new=c('cr1','cr2'))
-        #if(DF) fwrite(x = r,file = sub('$','.txt',f),append=T,quote = F,sep = '\t',nThread = 1) else
+        #if(DF) fwrite(x = r,file = f,append=T,quote = F,sep = '\t',nThread = 1) else
         r
       }
       ,cl=nc
     )
   }
-  ft<-sub('$','.txt',f)
   if(F){
-    if(DF) {zip(zipfile = {z<-sub('$','.zip',ft);z},files = ft);file.remove(ft)}
+    if(DF) {zip(zipfile = {z<-sub('$','.zip',f);z},files = f);file.remove(f)}
     dfbel2mel<-zip_to_disk.frame(zipfile = z,outdir = '.',nchunks=nchnk,shardby=ec('cr1,cr2'))[[1]]
   }
   cat('\nStarting bel2mel.RData.txt -> dfbel2mel.')
   dfbel2mel<-csv_to_disk.frame(
-    infile=ft
+    infile=f
     #  ,outdir = '~/d/p/bel2mel.df' %>% path.expand %>% {dir.create(.);.}
     ,chunk_reader = 'data.table'
     ,nchunks=nchnk
     ,shardby=ec('cr1,cr2')
   )#[[1]]
   cat(' Finished.')
-  file.remove('d/p/bel2mel-ew1.txt.gz')
-  file.remove('d/p/bel2mel-ew2.txt.gz')
-  cat('\nStarting dfbel2mel -> bel2mel-ew1.txt.gz.')
-  dfbel2mel[,
-            .SD[,.(ew =.N,ut=list(ut)),keyby=.(cr1,cr2)] %>% setkey(ew) %>% {
-              .[.(1)] %>% fwrite('d/p/bel2mel-ew1.txt.gz',sep = '\t',sep2=c('"',',','"'),append=T)
-              .[!.(1)] %>% fwrite('d/p/bel2mel-ew2.txt.gz',sep = '\t',sep2=c('"',',','"'),append=T)
-            }
-            ]
-  cat(' Finished.')
-  # bel2mel<-dfbel2mel[,.(ew =.N,ut=list(ut)),keyby=.(cr1,cr2)]
-  # nr<-nrow(bel2mel)
-  # cr1n<-bel2mel[,sum(is.na(cr1))]
-  # cr2n<-bel2mel[,sum(is.na(cr2))]
-  # iso<-sum(cr1n,cr2n)
-  # new1<-bel2mel[.(1),on='ew'][,.N]
-  # bel2mel %<>% .[!.(1),on='ew']
-  # attr(bel2mel,'results')<-data.table(case=c('ew==1','ew>=2'),N=c(new1,nrow(bel2mel)))[,prop:=N/sum(N)]
-  # 
-  # if(!DF){
-  #   bel2mel$crel %<>% rbindlist %>% setnames(old=c('V1','V2'),new=c('cr1','cr2'))
-  #   bel2mel$crel %<>% {.[,.(ew =.N,ut=list(ut)),keyby=.(cr1,cr2)]}
-  #   # trim edges where weight = 1
-  #   new1<-bel2mel$crel[.(1),on='ew'][,.N]
-  #   bel2mel$crel %<>% .[!.(1),on='ew']
-  #   attr(bel2mel$crel,'results')<-data.table(case=c('ew==1','ew>=2'),N=c(new1,bel2mel$crel[,.N]))[,prop:=N/sum(N)]
-  # }
-  # save(bel2mel,file=f)
-  # #browseURL('https://hub.gke.mybinder.org/user/brooksambrose-contours-p6m7z449/rstudio/export/bel2mel.RData?name=bel2mel.RData&file=~%2Fd%2Fp%2Fbel2mel.RData')
 }
 rm(f)
+cpumem(T)
+```
+
+
+```{r bel2mel-ew1.txt.gz}
+f<-'d/p/bel2mel-ew1.txt.gz'
+if(file.exists(f)){
+  warning(sprintf('%s already exists. Manually delete to replace.',f))
+} else 
+{
+  file.remove(f)
+  file.remove(sub('1','2',f))
+  cat('\nStarting dfbel2mel -> bel2mel-ew(1|2).txt.gz.')
+  dfbel2mel[
+    ,.SD[,.(ew =.N,ut=list(ut)),keyby=.(cr1,cr2)] %>% setkey(ew) %>% {
+      .[.(1)] %>% fwrite(f,sep = '\t',sep2=c('"',',','"'),append=T)
+      .[!.(1)] %>% fwrite(sub('1','2',f),sep = '\t',sep2=c('"',',','"'),append=T)
+    }]
+  cat(' Finished.')
+}
 # if(DF) {
 #   dfbel2mel<-as.disk.frame(bel2mel$crel[,!'ut'])
 #   attr(dfbel2mel,'results')<-attributes(bel2mel$crel)$results
 #   #rm(dbl2bel)
 # }
-
-```
-
-```{r cpumem3}
+rm(f)
 cpumem(T)
 ```
 
