@@ -8,7 +8,7 @@ knitr::opts_chunk$set(
 )
 library(tilit);library(magrittr)
 'data.table,disk.frame,ggplot2' %>% ec %>% sapply(library,character.only = T) %>% invisible # load packages
-setDTthreads(percent=2) # binder limits combined cpu load to 1 core's worth, so core use should be discounted
+setDTthreads(threads = 1) # binder limits combined cpu load to 1 core's worth, so core use should be discounted
 #if(parallel::detectCores()>1&getDTthreads()==1) setDTthreads(threads=2)
 nc<-getDTthreads() # for functions asking for number of cores
 nchnk<-nc*2^4
@@ -93,7 +93,7 @@ if(file.exists(f)){
       ,by = ut]
     cat(' Finished.')
     cat('\nStarting sort.')
-    system.time(system(sprintf('(head -n 1 %s && tail -n +2 %s | sort --radixsort -k 2 -S 1G %s) > %s',f,f)))
+    system.time(system(sprintf('(head -n 1 %s && tail -n +2 %s | sort -k 2 -S 1G) > %s && rm %s',f,f,sub('\\.txt$','-sorted\\.txt',f),f)))
     cat(' Finished.')
   } else
   {
@@ -121,24 +121,9 @@ dfbel2mel<-csv_to_disk.frame(
   ,chunk_reader = 'data.table'
   ,nchunks=1
 )
-# shard(
-#   df,
-#   shardby,
-#   outdir = tempfile(fileext = ".df"),
-#   ...,
-#   nchunks = recommend_nchunks(df),
-#   overwrite = FALSE,
-#   shardby_function = "hash",
-#   sort_splits = NULL,
-#   desc_vars = NULL
-# )
-#   ,shardby=ec('cr1,cr2')
-#   ,shardby_function='sort'
-# 
-# cat(' Sharding.')
-#   ,shardby=ec('cr1,cr2')
-#   ,shardby_function='sort'
-
+#pf2<-profvis::profvis({
+rechunk(dfbel2mel,nchunks = 16,shardby=c('cr1','cr2'))
+#    })
 cat(' Finished.')
 rm(f)
 cpumem(T)
