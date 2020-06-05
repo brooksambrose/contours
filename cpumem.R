@@ -47,8 +47,4 @@ k<-cm[,.(gbM=max(gbm),t=max(t),pcU=max(pcu)),keyby=PID] %>% setorder(-gbM)
   
   
 }
-p
-ggsave('cpumem.png',p
-       #,width=288/72,height=1400/72
-       ,dpi=72
-)
+72 %>% {ggsave('cpumem.png',p,dpi=.,units = 'in',width = 1400/.,height=900/.)}
