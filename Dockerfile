@@ -1,1 +1,1 @@
-FROM gcr.io/binder-prod/r2d-f18835fd-brooksambrose-2dcontours-a66a57:e53153d78eaba826497288eb7f4735cf39a53e7d
+FROM gcr.io/binder-prod/r2d-f18835fd-brooksambrose-2dcontours-a66a57:3c90f524f0f79fafa6134f1bb17da7583f2176f5
