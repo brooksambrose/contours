@@ -1,4 +1,4 @@
-nc<-Sys.getenv('CPU_LIMIT') %>% as.integer # use binder cpu_limit on build pod
+nc<-as.integer(Sys.getenv('CPU_LIMIT')) # use binder cpu_limit on build pod
 if(is.na(nc)) nc<-max(1,parallel::detectCores()-1)
 if(!require(devtools)) {install.packages('devtools',Ncpus=nc);library(devtools)}
 # special packages
