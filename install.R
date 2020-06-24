@@ -1,5 +1,6 @@
 nc<-as.integer(Sys.getenv('CPU_LIMIT')) # use binder cpu_limit on build pod
 if(is.na(nc)) nc<-max(1,parallel::detectCores()-1)
+cat(sprintf('Usable cores: %s\n',nc))
 if(!require(devtools)) {install.packages('devtools',Ncpus=nc);library(devtools)}
 # special packages
 devtools::install_github('bstewart/stm',ref = 'development',Ncpus=nc)
