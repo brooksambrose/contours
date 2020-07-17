@@ -4,13 +4,18 @@ if(is.na(nc)) nc<-max(1,parallel::detectCores()-1)
 cat(sprintf('Usable cores: %s\n',nc))
 if(!require(devtools)) {install.packages('devtools',Ncpus=nc);library(devtools)}
 # special packages
-devtools::install_github('bstewart/stm',ref = 'development',Ncpus=nc)
+try(devtools::install_github('bstewart/stm',ref = 'development',Ncpus=nc))
+try(devtools::install_github("larmarange/JLutils",Ncpus=nc))
 {devtools::install_github('brooksambrose/pack-dev',subdir='tilit',Ncpus=nc);library(tilit)}
 devtools::install_github('brooksambrose/pack-dev',subdir = 'plagiat',Ncpus=nc)
+try(devtools::install_github('wleepang/shiny-pager-ui',Ncpus=nc))
 # CRAN packages
 if(!require(magrittr)) {install.packages('magrittr',Ncpus=nc);library(magrittr)}
 tilit::ec(
 'data.table
+ggdendro
+miniUI
+reprex
 imager
 doBy
 microbenchmark

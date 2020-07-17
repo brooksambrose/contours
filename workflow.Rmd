@@ -1,47 +1,318 @@
 ```{r init}
+set.seed(12345)
 #stop('Don\'t run me dummy')
 #rm(list=ls()) # clear workspace
 cat('\014') # clear console
 knitr::opts_chunk$set(
   eval=T
   ,include=F
+  ,paged.print=F
 )
 library(tilit);library(magrittr)
-'data.table,disk.frame,ggplot2' %>% ec %>% sapply(library,character.only = T) %>% invisible # load packages
+'data.table,disk.frame,ggplot2,igraph,network,intergraph,forcats,shiny,miniUI,shinyPagerUI,dendextend,ggdendro' %>% ec %>% sapply(library,character.only = T) %>% invisible # load packages
+if(!dir.exists('d')) system('mkdir d && (cd d && mkdir q d p b)') # create data directory structure if it doesn't exist
 setDTthreads(threads = 1) # binder limits combined cpu load to 1 core's worth, so core use should be discounted
 #if(parallel::detectCores()>1&getDTthreads()==1) setDTthreads(threads=2)
 nc<-getDTthreads() # for functions asking for number of cores
 nchnk<-nc*2^4
 {DF<-T;if(DF) {setup_disk.frame();options(future.globals.maxSize = Inf)}} # set up disk frame
-if(!dir.exists('d')) system('mkdir d && (cd d && mkdir q d p b)') # create data directory structure if it doesn't exist
 cpumem<-function(download=T,browse=T,...) {
-  tilit::cpumem(...)
-  if(download|browse) Sys.getenv('RSTUDIO_HTTP_REFERER') %>% {if(.!='') if(interactive()) {
-    if(download) browseURL(sprintf('%sexport/cpumem.png?name=cpumem.png&file=~%%2Fcpumem.png',.))
-    if(browse) browseURL(sprintf('%sfiles/cpumem.png',.))
-  }}
+  if(F) {tilit::cpumem(...)
+    if(download|browse) Sys.getenv('RSTUDIO_HTTP_REFERER') %>% {if(.!='') if(interactive()) {
+      if(download) browseURL(sprintf('%sexport/cpumem.png?name=cpumem.png&file=~%%2Fcpumem.png',.))
+      if(browse) browseURL(sprintf('%sfiles/cpumem.png',.))
+    }}
+  }
 }
 cpumem(F,F)
+thr<-.1
 ```
 
 # Import WOK Data
 
 ```{r wok2dbl}
-# create link to original location in clean data structure 
-if(!file.exists('d/p/wok2dbl.RData')) system('link Out/wok2dbl.RData d/p/wok2dbl.RData')
-# Code that would generate database, but load saved data instead. Note original WOK records absent from repository.
 f<-'d/p/wok2dbl.RData'
+# create link to original location in clean data structure 
+if(!file.exists(f)) system('link Out/wok2dbl.RData d/p/wok2dbl.RData')
 if(file.exists(f)){
   load(f)
 } else {
+  # Code that would generate database, but load saved data instead. Note original WOK records absent from repository.
   wok2dbl<-plagiat::wok2dbl.f(dir = 'WoS.TextFiles.19Sept2018.61551/', out = 'Out')
   save(wok2dbl,file=f)
 }
-wok2dbl<-unique(wok2dbl)
 rm(f)
-if(DF) wok2dfl<-as.disk.frame(wok2dbl)
+wok2dbl<-unique(wok2dbl)
+if(DF) {wok2dfl<-as.disk.frame(wok2dbl);rm(wok2dbl)}
 cpumem(plot=T)
 ```
+
+# Cleaning
+
+```{r dbl2crl}
+f<-'d/q/dbl2crl.txt.gz'
+if(file.exists(f)){
+  warning(sprintf('%s already exists. Manually delete to replace.\nReturning dbl2cro cleaning key.\n',f))
+  dbl2cro<-fread(sub('crl','cro',f))
+} else {
+  dbl2crl.f<-function(){
+    crl<-data.table(cro={if(DF) srckeep(wok2dfl,ec('field,val')) else wok2dbl}['CR',on='field',val %>% unique])[,cr:=cro %>%  toupper %>% sub(', DOI.+','',.) %>% gsub('<[^>]+>','',.) %>% sub('^[ANONYMOUS]','',.,fixed=T)] %>% setcolorder(2:1) 
+    # write original keyed to trimmed
+    fwrite(x = crl[cr!=cro],file=sub('crl','cro',f),quote = F,sep = '\t')
+    crl[,cro:=NULL]
+    if(anyDuplicated(crl)) crl<-unique(crl)
+    # write just levels
+    fwrite(x = crl,file=f,quote = F,sep = '\t')
+  }
+  dbl2crl.f()
+  dbl2cro<-fread(sub('crl','cro',f))
+}
+rm(f)
+```
+
+
+```{r crl2reg}
+#CR levels to regionalized match candidates. Processor intensive, so performed on Google Cloud server.
+f<-'d/qq/crl2reg.txt.gz'
+if(file.exists(f)){
+  crl2reg<-unique(fread(f))
+} else {
+  crl2reg.f<-function(thr=.1){
+    crl2reg<-try(fread(f))
+    if(inherits(crl2reg,'try-error')) {minit<-list();ix<-0} else {
+      ix<-try(dbl2crl[,which(cr==crl2reg[.N,cr])])
+      if(inherits(ix,'try-error')) {minit<-list();ix<-0} else {minit<-crl2reg[,as.list(cr)]}
+    }
+    ix<-ix+1
+    dbl2crl[,{
+      m<-minit
+      pbapply::pblapply(ix:.N,function(i) if(!cr[i]%in%m) {
+        r<<-cr[-i][stringdist::amatch(x = cr[i],table = cr[-i],method = 'jw',maxDist = thr,nomatch = NA_character_)]
+        if(!is.na(r)) {data.table(cr=cr[i],cra=r) %>% fwrite(f,append = T,quote=F,sep='\t');m[[length(m)+1]]<<-r}
+      },cl = parallel::detectCores()/2)}]
+    unique(fread(f))
+  }
+  crl2reg<-crl2reg.f()
+}
+rm(f)
+```
+
+```{r reg2trn}
+f<-'d/q/reg2trn.RData'
+if(file.exists(f)){
+  load(f)
+} else {
+  reg2trn.f<-function(thr=.1){
+    g<-graph_from_edgelist(crl2reg %>% as.matrix,directed=F)
+    trn<-data.table(cr=V(g)$name,cmp=components(g)$membership)[,cmp:=cmp %>% factor %>% fct_infreq %>% as.integer] %>% setkey(cmp,cr)
+    trn
+  }
+  reg2trn<-reg2trn.f()
+  save(reg2trn,file=f)
+}
+rm(f)
+```
+
+```{r crl2crm}
+f<-'d/q/crl2crm.txt.gz'
+if(file.exists(f)){
+  crl2crm<-fread(f,keepLeadingZeros=T)[,ix:=.I]
+} else {
+  f %>% unlink
+  crl2crm.f<-function(){
+    
+    crt[,cro:=NULL]
+    if(anyDuplicated(crt)) crt<-unique(crt)
+    crt[,scr:=cr %>% strsplit(', ')][,l:=sapply(scr,length)] %>% setorder(-l)
+    crt[,table(l) %>% plot]
+    map<-function(y,dbg=F){
+      if(dbg) cat(paste(y,collapse=', '))
+      ix<-1:length(y)
+      wY<-grep('^(([01][0-9]{3})|(20[012][0-9]))$',y[ix]) %>% {if(length(.)) ix[min(.)] else ''}
+      ix<-setdiff(ix,wY)
+      wV<-'^V[<0-9 ACXIDLVM]+$' %>% {ix[grep(.,y[ix])][1]} %>% {if(is.na(.)) '' else {if(wY>.) '' else .}}
+      ix<-setdiff(ix,wV)
+      wP<-'^P(\\[|[0-9 CDFHILMNVX]+$)' %>% {rev(ix[grep(.,y[ix])])[1]} %>% {if(is.na(.)) '' else {if(wV>.) '' else .}}
+      if(wV!=''&wP!='') wV<-wV:(wP-1)
+      if(wP!='') wP<-ix[ix>=wP]
+      ix<-setdiff(ix,wP)
+      if(wY!='') {wA<-ix[ix<wY];wS<-ix[ix>wY]} else if(length(ix)>1) {wA<-ix[1];wS<-ix[2:length(ix)]} else {wA<-ix;wS<-ix}
+      if(!length(wA)) wA<-''
+      if(!length(wS)) wS<-''
+      of<-function(z) z %>% {if(.[1]=='') . else paste(y[.],collapse=', ')}
+      wD<-''
+      of(wS) %>% {if(grepl('  +[0-9]{4}$',.)&wY!='') wD<<-sub('.+ ','',.);wS<<-sub('  .+','',.)}
+      data.table(a=of(wA),y=of(wY),s=wS,d=wD,v=of(wV),p=of(wP))
+    }
+    pbapply::pblapply(crt$scr,function(x) map(x) %>% fwrite(f,append = T,quote=F,sep='\t')) %>% rbindlist
+    fread(f,keepLeadingZeros=T)[,ix:=.I]
+  }
+  crl2crm<-crl2crm.f()
+}
+setattr(crl2crm,'lev',sub('crm','crm-lev',f))
+rm(f)
+withr::with_seed(12345,crl2crm<-crl2crm[sample(1:.N,10000)])
+```
+
+
+```{r crm2fuz}
+f<-'d/q/crm2fuz.RData'
+if(file.exists(f)){
+  load(f)
+} else {
+  crm2fuz.f<-function(nsamp=1000,apprx=ec('ceiling,floor'),strict=F,plot=T,thr){
+    clp<-function(x) x %>% Filter(f = function(y) y!='') %>% paste(collapse=', ')
+    slv<- function(y,max=T,smry=T){ # solves quadratic to learn approximately how big a network corresponds to a complete edgelist of size y. Inverse to counting number of possible unordered, loopless, pairwise combinations: x(x-1)/2
+      pwc<-function(x) x*(x-1)/2
+      delta<-function(a,b,c){
+        b^2-4*a*c
+      }
+      q<-function(a,b,c){
+        if(delta(a,b,c) > 0){ # first case D>0
+          x_1 = (-b+sqrt(delta(a,b,c)))/(2*a)
+          x_2 = (-b-sqrt(delta(a,b,c)))/(2*a)
+          result = c(x_1,x_2)
+        }
+        else if(delta(a,b,c) == 0){ # second case D=0
+          x = -b/(2*a)
+        }
+        else {"There are no real roots."} # third case D<0
+      }
+      r<-q(a=1/2,b=-1/2,c=-y)
+      if(max) r<-max(r)
+      if(smry&max) {
+        r<-rbind(
+          floor=c(vertices=floor(r),edges=pwc(floor(r)))
+          ,ceiling=c(vertices=ceiling(r),edges=pwc(ceiling(r))
+          ))
+        attr(r,'edge_target')<-y
+      }
+      r
+    }
+    crl2crm[,cr:=apply(.SD,1,function(x) x %>% unique %>% clp),.SDcols=!'ix']  # some original records did have redundant author and source, so will have to fix this later with accurate levels import
+    ## try three different ways to regionalize ##
+    ## sample to choose thresh
+    tgt<-list(tgt=nsamp,apx=apprx[1])
+    withr::with_seed(12345,sel<-crl2crm[,{
+      tgt %>% {slv(.[['tgt']])[.[['apx']],'vertices']} %>% 
+        sample(x=sub('[ANONYMOUS], ','',cr,fixed=T)) %>% combn(m=2) %>% t %>% data.table %>% setnames(ec('a,b')) %>% 
+        .[,.(s=a,r=b,jwd=do.call(what = stringdist::stringdist,c(.SD,method='jw',p=0)))]
+    }]) %>% setorder(-jwd)
+    chg<-sel[,ov2chpt.f(jwd,drv = 3,warn = F)]
+    chg[,k2:=kmeans(sel$jwd,2)$cluster][,ix:=.I]
+    d<-data.table(sel,chg)[,!'x']
+    if(is.null(thr)) thr<-d[.(tail(g,1)),on='g'][if(strict) .N else 1,jwd]
+    p<-qplot(data=d,geom='line',x=ix,y=jwd,linetype=g,shape=g,color=factor(k2)) +
+      geom_text(data=d[c(1,which(!!c(0,diff(g))|!!c(0,diff(k2))),.N),lab:=paste(sep='\n',round(jwd,5),s,r)][,fnt:=(1:2)[(jwd==thr)+1]][],aes(label=lab,fontface=fnt),hjust='inward')
+    if(!is.null(thr)) p<-p+annotate(geom='hline',yintercept=thr,color='white') + annotate(geom='text',x=0,y=thr,label=paste('Manual thr:',round(thr,3)),color='white',hjust='inward')
+    # first, adist on jw p=.1, make edgelist, extract components
+    crl2crm[,cra:={m<-character(.N);pbapply::pbsapply(1:.N,function(i) m[i]<<-setdiff(cr[-i],m[i]) %>% {.[stringdist::amatch(x = cr[i],table = .,method = 'jw',maxDist = thr,nomatch = NA_character_)]});m}]
+    cel<-crl2crm[!is.na(cra),.(s=cr,r=cra,jwd=mapply(stringsim,a=cr,b=cra,method='jw',p=0))][!!(jwd-1),data.table(.SD %>% apply(1,sort) %>% t,jwd) %>% setnames(ec('s,r,jwd')),.SDcols=!'jwd'] %>% unique %>% setorder(-jwd)
+    g<-graph_from_edgelist(cel[,.SD %>% as.matrix,.SDcols=ec('s,r')],F) %>% {E(.)$weight<-cel$jwd;.}
+    cmp<-components(g) %>% {data.table(cr=V(g)$name,m=membership(.) %>% factor %>% forcats::fct_infreq(.) %>% as.integer)}
+    cel[,cmp:=..cmp[s,on='cr',m]]
+    cel[,cmp:=forcats::fct_reorder(.f = as.character(cmp),.x = jwd,.fun =function(x) -median(x)) %>% as.integer %>% factor %>% forcats::fct_infreq(.)] %>% setorder(cmp,-jwd)
+    
+    # plot first 10 variation candidate sets
+    withr::with_package('showtext',{
+      font_add_google('Wire One','Wire One')
+      showtext_auto()
+      if(plot) pdf(sub('RData$','pdf',f))
+      
+      rg<-cel[c(levels(cmp)[1:10],as.character(1:10)) %>% unique,on='cmp'
+              , list({
+                g<-graph_from_edgelist(cbind(s,r),F) %>% {E(.)$weight<-round(jwd*100);.}
+                sg<-strength(g)
+                sgi<-sg %>% {.-min(.)+1}
+                vpal<-viridis::viridis(max(sgi),option = 'viridis')
+                ew<-E(g)$weight
+                ewi<-ew %>% {.-min(.)+1}
+                epal<-viridis::viridis(max(ewi),option = 'magma',direction=-1)
+                withr::with_seed(12345,lyt<-igraph::layout_with_fr(g))
+                
+                if(plot) {
+                  par(bg='gray')
+                  plot.igraph(
+                    g
+                    ,layout=lyt
+                    ,edge.color=epal[ewi]
+                    ,vertex.color=vpal[sgi]  
+                    ,vertex.label.family='Wire One'
+                    ,vertex.size=5
+                    ,vertex.label.cex=.75
+                    ,main=paste('N:',.N,'C:',cmp[1],'JW:',round(100*mean(jwd)))
+                    ,sub='top bar: node strength (sum of edge weights) \nbottom bar: string similarity (edge weight)'
+                  )
+                  plotrix::color.legend(-1,1.1,1,1.15,legend=range(sg) %>% {.[1]:.[2]} %>% {.[!.%in%sg]<-'';.},rect.col = vpal,align = 'lt',gradient='x',cex = .5,col='white',font=2)
+                  plotrix::color.legend(-1,-1.15,1,-1.1,legend=range(ew) %>% {.[1]:.[2]} %>% {.[!.%in%ew]<-'';.},rect.col = epal,align = 'rb',gradient='x',cex = .5,col='white',font=2)
+                }
+                cat('.')
+                list(set_graph_attr(g,'layout',lyt))
+              }),by=cmp]$V1
+      if(plot) dev.off()
+    })
+    
+    
+    # second, stringdistmatrix
+    p
+  }
+  crm2fuz<-crm2fuz.f()
+  save(crm2fuz,file=f)
+}
+rm(f)
+crm2fuz
+```
+
+```{r dbl2fuz}
+odl<-function(f) {
+  if(interactive()) Sys.getenv('RSTUDIO_HTTP_REFERER') %>% {if(.!='')
+    paste0(
+      paste0(.,'/export/',f)
+      ,'?name=',basename(f),'&file=',paste0('~/',f)) %>% 
+      strsplit('//') %>% .[[1]] %>% {paste(.[1],paste(.[-1],collapse='/'),sep='//')} %>% 
+      browseURL
+  }}
+f<-'d/q/dbl2fuz.RData'
+if(file.exists(f)){
+  load(f)
+} else {
+  dbl2fuz.f<-function(){
+    source('https://raw.githubusercontent.com/larmarange/JLutils/master/R/clustering.R')
+    cr<-wok2dbl['CR',on='field',val %>% toupper %>% unique %>% sort]
+    crs<-cr[1:10] %>% sub(', DOI.+','',.)
+    withr::with_package(
+      ec('stringdist')
+      ,{
+        sd<-list()
+        for(i in c("osa", "lv", "dl", "hamming", "lcs", "qgram",
+                   "cosine", "jaccard", "jw", "soundex")){
+          sd[[i]]<-stringdistmatrix(crs,method=i,useNames='strings')
+          cat(i,'')
+        }
+      }
+    )
+    for(i in names(sd)) sd[[i]] %>% {if(!any(is.infinite(.),is.na(.)))
+      dendextend::seriate_dendrogram(hclust(.),.) %>% as.dendrogram(hang=0) %>% dendextend::plot_horiz.dendrogram(main=i,horiz=T,side=F)} 
+  }
+  dbl2fuz<-dbl2fuz.f()
+  save(dbl2fuz,file=f)
+}
+odl(f)
+rm(f)
+
+r<-crs %>% strsplit(', ') %>% .[9:10] %>% expand.grid(stringsAsFactors = F) %>% {data.table(.,d=apply(.,1,function(x) stringdist::stringdist(x[1],x[2],method='jw',p=.25)))} %>% setkey(Var1,Var2) %>% {
+  r<-list()
+  l<-.
+  while(nrow(l)) {
+    r[[length(r)+1]]<-l[which.min(d)]
+    l<-l[!.(r[[length(r)]]$Var1),on='Var1']
+    l<-l[!.(r[[length(r)]]$Var2),on='Var2']
+  }
+  rbindlist(r)[,nd:=.SD[,!'d'] %>% apply(1,function(x) if(all(stringi::stri_count_regex(x,'[0-9]+')==1)) gsub('[^0-9]','',x) %>% as.integer %>% sort %>% diff else NA ) ] 
+}
+r
+```
+
 
 # Bimodal edge list
 
@@ -51,17 +322,19 @@ if(file.exists(f)){
   rm(wok2dbl)
   load(f)
 } else {
-  dbl2bel<-plagiat::dbl2bel.f(wok2dbl,out=dirname(f),trim_doi = T,trim_anon = T,trim_loops = T,capitalize = T,trim_pendants = T) %>% invisible
+  wok2dbl<-{if(DF) wok2dfl else wok2dbl}['CR',on='field'] # implement this inside dbl2bel
+  wok2dbl[dbl2cro,on='val==cro',val:=cr]
+  dbl2bel<-plagiat::dbl2bel.f(
+    wok2dbl
+    ,out=dirname(f),trim_doi = F,trim_anon = F,trim_loops = T,capitalize = F,trim_pendants = T) %>% invisible
   save(dbl2bel,file=f)
   rm(wok2dbl)
 }
 r<-attributes(dbl2bel)$results
 dbl2bel<-unique(dbl2bel[!(pend|loop),.(ut,cr)]) %>% setkey(ut,cr)
 dbl2bel[,`:=`(ut=factor(ut),cr=factor(cr))] %>% setkey(ut,cr)
-lut<-gzfile(paste(dirname(f),'bel2mel-ut-levs.txt.gz',sep=.Platform$file.sep),'w')
-writeLines(dbl2bel[,levels(ut)],lut)
-lcr<-gzfile(paste(dirname(f),'bel2mel-cr-levs.txt.gz',sep=.Platform$file.sep),'w')
-writeLines(dbl2bel[,levels(cr)],lcr)
+of<-sprintf(paste(dirname(f),'bel2mel-%s-levs.txt',sep=.Platform$file.sep),ec('ut,cr')) %>% {names(.)<-ec('ut,cr');.}
+for(i in names(of)) writeLines(dbl2bel[,levels(get(i))],of[i])
 dbl2bel[,ut:=as.integer(ut)][,cr:=as.integer(cr)] %>% setkey(ut,cr)
 
 if(DF) {
@@ -69,7 +342,7 @@ if(DF) {
   attr(dfl2bel,'results')<-r
   rm(dbl2bel)
 }
-r
+™r
 rm(f,r)
 cpumem(plot=T)
 ```
@@ -92,7 +365,7 @@ if(file.exists(f)){
       ,by = ut]
     cat(' Finished.')
     cat('\nStarting sort.')
-    system.time(system(sprintf('(head -n 1 %s && tail -n +2 %s | sort -k 2 -S 1G) > %s && rm %s',f,f,sub('\\.txt$','-sorted\\.txt',f),f)))
+    system.time(system(sprintf('time (head -n 1 %s && tail -n +2 %s | sort -k 2 -S 1G) > %s && rm %s',f,f,sub('\\.txt$','-sorted\\.txt',f),f)))
     cat(' Finished.')
   } else
   {
@@ -115,13 +388,13 @@ if(file.exists(f)){
 cpumem(T)
 cat('\nStarting bel2mel.RData.txt -> dfbel2mel.')
 dfbel2mel<-csv_to_disk.frame(
-  infile=f
+  infile=f %>% sub('RData','RData-sorted',.)
   #  ,outdir = '~/d/p/bel2mel.df' %>% path.expand %>% {dir.create(.);.}
   ,chunk_reader = 'data.table'
   ,nchunks=1
 )
 #pf2<-profvis::profvis({
-rechunk(dfbel2mel,nchunks = 16,shardby=c('cr1','cr2'))
+try(rechunk(dfbel2mel,nchunks = 16,shardby=c('cr1','cr2'),overwrite=F,outdir = 'd/p/bel2mel.df'))
 #    })
 cat(' Finished.')
 rm(f)
@@ -154,40 +427,275 @@ rm(f)
 cpumem(plot=T)
 ```
 
-<!--
-# Unimodal graph
-
-```{r}
-library(igraph)
-load('Out/el.RData')
-g<-graph_from_edgelist(el %>% as.matrix)
-V(g)$type<-grepl('^WOS:',V(g)$name)
-system.time(cg<-cluster_louvain(as.undirected(g)))
-ct<-apply(cg$memberships,1,function(x) x %>% table %>% sort(decreasing = T))
-View(ct)
-system.time(gcr<-bipartite_projection(g,which='false'))
-save(gcr,file='Out/gcr.RData')
-
-# count 
-load('Out/gcr.RData')
-system.time(et<-E(gcr)$weight %>% table %>% prop.table %>% `*`(100))
-cbind(round(et,4))[1:10,]
-
-# keep only edge weights greater than 1
-gcr<-subgraph.edges(gcr,which(E(gcr)$weight>1))
-save(gcr,file='Out/gcr_cull.RData')
-
-# cluster culled graph
-system.time(cgr<-cluster_louvain(gcr))
-save(cgr,file='Out/cgr_culled.RData')
-
-# rename cluster ids to be in sequence by size
-sm<-list()
-for(i in 1:nrow(cgr$memberships)) sm[[i]]<-factor(cgr$memberships[i,],levels=order(table(cgr$memberships[i,]),decreasing = T))
-sm<-do.call(data.table,sm)
-setnames(sm,paste0('h',ncol(sm):1))
-sm[,cr:=cgr$names]
-sm[,m:=as.integer(h1)] %>% setkey(m)
+```{r mel2g}
+f<-'d/p/mel2g.RData'
+if(file.exists(f)){
+  load(f)
+} else {
+  mel2g.f<-function(){
+    mel<-fread('d/p/bel2mel-ew2.txt.gz')
+    g<-graph_from_edgelist(mel[,lapply(.SD, as.character),.SDcols=ec('cr1,cr2')] %>% as.matrix,directed = F)
+    E(g)$weight<-mel[,ew]
+    # read names from gz levels file, make a function
+    ix<-data.table(ix=V(g)$name %>% as.integer)[,o:=.I] %>% setkey(ix)
+    ix[,skp:=c(ix[1],diff(ix))-1]
+    #con <- gzfile(description = "d/p/bel2mel-cr-levs.txt.gz",open = 'r') #create file connection
+    con <- file(description = "d/p/bel2mel-cr-levs.txt",open = 'r') #create file connection
+    ix[,n:=pbapply::pbsapply(skp, function(i) scan(file = con,what=character(),skip=i,nlines=1,sep='\n',quiet = T),cl=1)]
+    close(con)
+    ix %>% setorder(o)
+    V(g)$ix<-as.integer(V(g)$name)
+    V(g)$name<-ix$n %>% unlist
+    gd<-degree(g) %>% table %>% sort(T)
+    cat('head and tail of degrees\n')
+    print(head(gd))
+    print(tail(gd))
+    set_graph_attr(g,'mew',mel[,max(ew)])
+  }
+  mel2g<-mel2g.f()
+  save(mel2g,file=f)
+}
+rm(f)
 ```
 
--->
+```{r g2dd, paged.print=FALSE}
+f<-'d/q/g2dd.RData'
+if(file.exists(f)){
+  load(f)
+} else {
+  g2dd.f<-function(rnd=4){
+    dd<-data.table(dd=mel2g %>% degree)[,.N,by=dd] %>% setkey(dd)
+    dd[,pN:=prop.table(N)*100][,Ncum:=cumsum(N)][,pNcum:=cumsum(pN)]
+    ed<-data.table(ed=E(mel2g)$weight)[,.N,by=ed] %>% setkey(ed)
+    ed[,pN:=prop.table(N)*100][,Ncum:=cumsum(N)][,pNcum:=cumsum(pN)]
+    list(dd=dd,ed=ed)  %>% lapply(function(x) x[,.SD %>% lapply(round,rnd)])
+  }
+  g2dd<-g2dd.f()
+  save(g2dd,file=f)
+  mapply(x=g2dd,n=names(g2dd),function(x,n) fwrite(
+    x,quote = F,sep='\t'
+    ,file=sub('dd.RData',paste0(n,'.txt'),f,fixed = T)
+  )) %>% invisible
+}
+rm(f)
+# degree and edge weight distributions
+g2dd
+```
+
+```{r g2cg}
+f<-'d/p/g2cg.RData'
+if(file.exists(f)){
+  load(f)
+} else {
+  g2cg<-cluster_louvain(mel2g)
+  g2cg$ix<-V(mel2g)$ix
+  save(g2cg,file=f)
+}
+V(mel2g)$h1<-membership(g2cg)
+rm(f)
+```
+
+```{r cg2sm}
+# community graph to sequenced membership
+f<-'d/p/cg2sm.RData'
+if(file.exists(f)){
+  load(f)
+} else {
+  cg2sm.f<-function(){
+    # rename cluster ids to be in sequence by size
+    sm<-g2cg %>% {data.table(.$names,.$memberships %>% t)} %>% {setnames(.,c('id',paste0('h',if(ncol(.)-1) {(ncol(.)-1):1} else 1)))}
+    cm<-names(sm) %>% setdiff('id')
+    om<-sub('h','o',cm)
+    sm[,(om):=.SD %>% lapply(as.integer),.SDcols=cm]
+    sm[,(cm):=.SD %>% lapply(function(x) x %>% factor %>% forcats::fct_infreq(.) %>% as.integer),.SDcols=cm]
+    sm[,str:=strength(graph = mel2g,loops = F)] # TODO figure out how to separate within and between community ties, count directly in 2mel
+    sm[,deg:=degree(graph = mel2g,loops = F)] 
+    sm[,mut:=str/deg] # mean number of publications 
+    sm
+  }
+  cg2sm<-cg2sm.f()
+  save(cg2sm,file=f)
+}
+rm(f)
+smd<-cg2sm[,.N,by=h1] %>% setorder(-N) %>% .[,P:=N %>% prop.table %>% `*`(100) %>% round(3)]
+smt<-smd[,.(n=.N),by=N][,P:=n %>% prop.table %>% `*`(100) %>% round(3)] %>% setorder(N)
+smt[,cn:=cumsum(n)][,cP:=cumsum(P)]
+smt %>% fwrite('d/q/smt.txt') # sequenced membership table
+smt %>% knitr::kable(.)
+```
+
+```{r sm2samp}
+f<-'d/q/sm2samp'
+if(dir.exists(f)){
+  warning('Existing d/q/sm2samp will *not* be overwritten. Manually delete to replace.')
+} else {
+  MBR <- function(p) { #https://gis.stackexchange.com/a/22934
+    # Analyze the convex hull edges     
+    a <- chull(p)                                   # Indexes of extremal points
+    a <- c(a, a[1])                                 # Close the loop
+    e <- p[a[-1],] - p[a[-length(a)], ]             # Edge directions
+    norms <- sqrt(rowSums(e^2))                     # Edge lengths
+    v <- e / norms                                  # Unit edge directions
+    w <- cbind(-v[,2], v[,1])                       # Normal directions to the edges
+    
+    # Find the MBR
+    vertices <- p[a, ]                              # Convex hull vertices
+    x <- apply(vertices %*% t(v), 2, range)         # Extremes along edges
+    y <- apply(vertices %*% t(w), 2, range)         # Extremes normal to edges
+    areas <- (y[1,]-y[2,])*(x[1,]-x[2,])            # Areas
+    k <- which.min(areas)                           # Index of the best edge (smallest area)
+    
+    # Form a rectangle from the extremes of the best edge
+    cbind(x[c(1,2,2,1,1),k], y[c(1,1,2,2,1),k]) %*% rbind(v[k,], w[k,])
+  }
+  pMBR<-function(mbr,p){
+    limits <- apply(mbr, 2, range) # Plotting limits
+    plot(p[(function(x) c(x, x[1]))(chull(p)), ], 
+         type="l", asp=1, bty="n", xaxt="n", yaxt="n",
+         col="Gray", pch=20, 
+         xlab="", ylab="",
+         xlim=limits[,1], ylim=limits[,2])                # The hull
+    lines(mbr, col="Blue", lwd=3)                         # The MBR
+    points(p, pch=19)                                     # The points
+  }
+  mug<-function(g,f,s){ # function and slug, merge selected attributes of graph union
+    n<-list(V=igraph::vertex_attr_names(g),E=igraph::edge_attr_names(g))
+    n<-grep(s,n[[f]],value=T)
+    m<-do.call(cbind,lapply(n,function(x) eval(parse(text=sprintf('%s(g)$%s',f,x)))))
+    apply(m,1,function(x) x %>% na.omit %>% unique)
+  }
+  sm2samp.f<-function(lim=20,ego=1,iterations=1000,seed=12345,plot=T,fr=ec('igraph,network')){
+    set.seed(seed)
+    dir.create(f)
+    samp<-smd[between(N,2,lim),.(h1=if(.N<=10) h1 else sample(h1,10) %>% sort),by=N]
+    r<-merge(cg2sm[,.(h1,id,str,deg,mut=round(mut,1))],samp,by='h1') %>% setorder(N,h1,-str,-mut)
+    nf<-max(nchar(r$h1))
+    withr::with_package('showtext',{
+      font_add_google('Wire One','Wire One')
+      showtext_auto()
+      rg<-r[, list({
+        d<-paste(f,sprintf(N[1],fmt=paste0('N%0',nchar(lim),'d')),sep = .Platform$file.sep)
+        if(!dir.exists(d)) dir.create(d)
+        p<-paste(d,sprintf(h1[1],fmt=paste0('C%0',nf,'d.txt')),sep=.Platform$file.sep)
+        options(datatable.print.nrows=.N)
+        tp<-capture.output(print(.SD[,.(str,deg,mut,id)]))
+        writeLines(tp[-length(tp)],con=p)
+        g<-do.call(igraph::union,make_ego_graph(graph = mel2g,order=ego,nodes=id))
+        sg<-strength(g)
+        sgi<-sg %>% {.-min(.)+1}
+        vpal<-viridis::viridis(max(sgi),option = 'viridis')
+        ew<-mug(g,'E','weight')
+        ewi<-ew %>% {.-min(.)+1}
+        epal<-viridis::viridis(max(ewi),option = 'magma',direction=-1)
+        withr::with_seed(seed,{
+          if(fr[1]=='igraph') {
+            lyt<-igraph::layout_with_fr(g,niter=iterations,weights=ew)
+          } else{
+            net<-intergraph::asNetwork(g)
+            lyt<-network::network.layout.fruchtermanreingold(net,layout.par = NULL)
+          }
+          #
+          
+        })
+        if(plot) {
+          pdf(sub('txt$','pdf',p))
+          par(bg='gray')
+          plot.igraph(
+            g
+            ,layout=lyt
+            ,edge.color=epal[ewi]
+            ,vertex.color=vpal[sgi]  %>%  {.[!(mug(g,'V','name')%in%id)]<-'gray';.}
+            ,vertex.frame.color=ec('white,black')[(mug(g,'V','name')%in%id)+1]
+            ,vertex.label.color=ec('darkgray,black')[(mug(g,'V','name')%in%id)+1]
+            ,vertex.label.family='Wire One'
+            ,vertex.size=5
+            ,vertex.label.cex=.75
+            ,main=paste('N:',N[1],'C:',h1[1])
+            ,sub='top bar: node strength (sum of edge weights) \nbottom bar: number of citing articles (edge weight)'
+          )
+          plotrix::color.legend(-1,1.1,1,1.15,legend=range(sg) %>% {.[1]:.[2]} %>% {.[!.%in%sg]<-'';.},rect.col = vpal,align = 'lt',gradient='x',cex = .5,col='white',font=2)
+          plotrix::color.legend(-1,-1.15,1,-1.1,legend=range(ew) %>% {.[1]:.[2]} %>% {.[!.%in%ew]<-'';.},rect.col = epal,align = 'rb',gradient='x',cex = .5,col='white',font=2)
+          dev.off()
+        }
+        cat('.')
+        list(set_graph_attr(g,'layout',lyt))
+      }),by=.(N,h1)]$V1
+    })
+    cat('\n')
+    warning(sprintf('\ncluster samples printed to %s',f))
+    rg
+  }
+  system.time(sm2samp<-sm2samp.f(plot=T))
+}
+rm(f)
+#1 %>% {withr::with_seed(seed,plot(intergraph::asNetwork(rev(sm2samp)[[.]])))} %>% {pMBR(MBR(.),.)}
+```
+
+```{r sm2cc}
+# Johann has to decide size cutoff for communities
+Ncut<-50
+sm2cc<-cg2sm[.(smd[N>=Ncut]$h1),on='h1'] %>% setorder(h1,-str)
+```
+
+
+```{r cc2lab}
+f<-'d/q/cc2lab.txt'
+if(file.exists(f)){
+  load(f)
+} else {
+  cc2lab.f<-function(){
+    cc2lab<-sm2cc[,.SD %>% head(10),by=h1,.SDcols=ec('id,str,deg,mut')] %>% data.table(code='',.)
+    fwrite(copy(cc2lab)[,mut:=round(mut,1)],file=f,quote=F,sep='\t')
+    
+    DT::datatable(.,editable=list(target='cell',disable=list(columns=c(0,2:4)))) 
+    
+    #%>% htmlwidgets::saveWidget(.,file=sprintf('%s/d/b/clusterbrowser.html',getwd()),selfcontained = T)
+    # TODO make a shiny app that has an editable table that will save a csv with fwrite
+    
+  }
+  cc2lab<-cc2lab.f()
+  save(cc2lab,file=f)
+}
+rm(f)
+```
+
+
+```{r cc2yr}
+f<-'d/p/cc2yr.RData'
+if(file.exists(f)){
+  load(f)
+} else {
+  cc2yr.f<-function(){
+    load('d/p/wok2dbl.RData')
+    load('d/p/dbl2bel-ogcr.RData')
+    ut<-wok2dbl[CJ(field='CR',val=sm2cc$id),on=ec('field,val'),id] %>% unique
+    yr<-merge(
+      wok2dbl[CJ(field='CR',val=ogcr[sm2cc$id,on='t',og]),on=ec('field,val'),.(id,cr=val)]
+      ,wok2dbl[CJ(id=ut,field='PY'),on=ec('id,field'),.(id,yr=as.integer(val))]
+      ,by='id')
+    setnames(yr,'cr','og')
+    yr[,cr:=ogcr[og,on='og',t]]
+    rm(wok2dbl)
+    rm(ogcr)
+    yr<-merge(yr,sm2cc[,.(id,h1)],by.x='cr',by.y='id')[,.N,keyby=.(h1,yr)]
+    yr
+  }
+  cc2yr<-cc2yr.f()
+  save(cc2yr,file=f)
+}
+rm(f)
+```
+
+```{r mel2cel}
+f<-'d/p/mel2cel.RData'
+if(file.exists(f)){
+  load(f)
+} else {
+  mel2cel.f<-function(){
+    mel<-fread('d/p/bel2mel-ew2.txt.gz')
+  }
+  mel2cel<-mel2cel.f()
+  save(mel2cel,file=f)
+}
+rm(f)
+```
