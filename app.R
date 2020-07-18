@@ -141,15 +141,38 @@ reg2pck.f <-
     setkey(pd,cmp)
     cp<-pd[,unique(cmp)]
     pc<-if('time'%in%names(pd)) {if(pd[,all(is.na(.SD)),.SDcols='time']) 1 else pd[max(which(time!='')),which(cp==cmp)]} else 1
-    ix<-cp[pc]
+    ix<-reactiveVal(cp[pc])
     rbc<-c(LETTERS %>% head(5), '-')
+    pdup<-function(r,input){pd[data.table(cmp=isolate(ix()),r[, .(x, y)]), on = ec('cmp,x,y'), `:=`(group = isolate(input$labeler),user=try(system('echo $USER',intern = T)) %>% {if(inherits(.,'try-error')) '?'else .},time=format(Sys.time(),usetz=T))]}
+    pdwr<-function(){fwrite(x = pd %>% setkey(cmp),file = out,quote=F,sep='\t')}
+    pdpr<-function() {prnablank(pd[.(isolate(ix())),on='cmp', !ec('x,y,cmp')]);cat('\n\n')}
+    pldr<-function(){
+      pl[.(isolate(ix())),on='cmp',pl][[1]] +
+        geom_point(
+          data = dendextend::get_nodes_xy(pl[.(isolate(ix())),on='cmp',hd][[1]], type = 'triangle')[-which(dendextend::get_nodes_attr(pl[.(isolate(ix())),on='cmp',hd][[1]], 'leaf')), ] %>% rbind %>% data.table %>% setnames(ec('x,y')),
+          aes(x = x, y = y),
+          pch = 21,
+          size = 3,
+          fill = 'white',
+          inherit.aes = F
+        ) +
+        geom_label(
+          data = pd[.(isolate(ix())),on='cmp',],
+          aes(
+            x = x,
+            y = y * .9,
+            color = group,
+            label = group
+          ),
+          family = 'mono',
+          na.rm = T,
+          show.legend = F
+        )
+    }
     runApp(shinyApp(
       ui = fluidPage(
-        miniTitleBar(
-          sprintf('Component %s',pd[,cmp[1]]) #,
-          #left = miniTitleBarButton('prev', 'Prev'),
-          #right =  miniTitleBarButton('next', 'Next', primary = T)
-        ),column(width = 12,align='center',pageruiInput('pager',page_current = pc,pages_total = pd[,uniqueN(cmp)])),
+        uiOutput("title"),
+        column(width = 12,align='center',pageruiInput('pager',page_current = pc,pages_total = pd[,uniqueN(cmp)])),
         miniButtonBlock(
           actionButton('none', 'None', width = '60px'),
           radioButtons(
@@ -166,7 +189,7 @@ reg2pck.f <-
           width = 12,
           align = 'center',
           plotOutput(
-            "plot1",
+            "plot",
             brush = "plot_brush",
             click = "plot_click",
             # dblclick = 'plot_dbl',
@@ -175,81 +198,44 @@ reg2pck.f <-
         ),
         position = 'right',
         br(),
-        verbatimTextOutput("info"),
+        verbatimTextOutput("table"),
         tags$style(type = "text/css", ".recalculating { opacity: 1.0; }")
       )
       ,
       server = function(input, output, session) {
-        output$info <- renderPrint({
+        # pager changes -> update global reactive index, then redraw plot, reprint table, title
+        observeEvent(input$pager,{ix(cp[isolate(input$pager$page_current)])})
+        output$table<-renderPrint({input$pager;ix();pdpr()})
+        output$title<-renderUI({input$pager;ix();tagList(miniTitleBar(
+          sprintf('Component %s',pd[,cmp[1]]) #,
+          #left = miniTitleBarButton('prev', 'Prev'),
+          #right =  miniTitleBarButton('next', 'Next', primary = T)
+        ))})
+        # None button sets all to -
+        output$table <- renderPrint({
           input$none
-          input$all
-          input$pager
-          input$labeler
-          input$plot_click
-          input$plot_brush
-          input$pager$page_current
-          
-          ix<<-cp[isolate(input$pager$page_current)]
-          bp <-
-            brushedPoints(
-              pd[.(ix),on='cmp'],
-              isolate(input$plot_brush),
-              xvar = "y",
-              yvar = "x",
-              allRows = F
-            ) %>% data.table
-          np <-
-            nearPoints(
-              pd[.(ix),on='cmp'],
-              isolate(input$plot_click),
-              threshold = Inf,
-              maxpoints = 1,
-              xvar = "y",
-              yvar = "x",
-              allRows = F
-            ) %>% data.table
-          r<-data.table()
-          if (nrow(bp)) r<-bp
-          if(nrow(np)) r<-np
-          rm(bp, np)
-          
-          if(nrow(r)) pd[data.table(cmp=ix,r[, .(x, y)]), on = ec('cmp,x,y'), `:=`(group = isolate(input$labeler),user=try(system('echo $USER',intern = T)) %>% {if(inherits(.,'try-error')) '?'else .},time=format(Sys.time(),usetz=T))]
-          if(isolate(input$all)) pd[.(ix),on='cmp', `:=`(group = rbc[1],user=try(system('echo $USER',intern = T)) %>% {if(inherits(.,'try-error')) '?'else .},time=format(Sys.time(),usetz=T))]
-          if(isolate(input$none)) pd[.(ix),on='cmp', `:=`(group = tail(rbc,1),user=try(system('echo $USER',intern = T)) %>% {if(inherits(.,'try-error')) '?'else .},time=format(Sys.time(),usetz=T))]
-          fwrite(x = pd %>% setkey(cmp),file = out,quote=F,sep='\t')
-          {function() {prnablank(pd[.(ix),on='cmp', !ec('x,y,cmp')]);cat('\n\n')}}() # some foolishness to get an extra break
+          pd[.(isolate(ix())),on='cmp', `:=`(group = tail(rbc,1),user=try(system('echo $USER',intern = T)) %>% {if(inherits(.,'try-error')) '?'else .},time=format(Sys.time(),usetz=T))]
+          pdwr();pdpr()
         })
-        output$plot1 <- renderPlot({
-          input$none
+        # All button sets all to A
+        output$table <- renderPrint({
           input$all
-          input$pager
-          input$labeler
-          input$plot_click
-          input$plot_brush
-          input$pager$page_current
-          
-          pl[.(ix),on='cmp',pl][[1]] +
-            geom_point(
-              data = dendextend::get_nodes_xy(pl[.(ix),on='cmp',hd][[1]], type = 'triangle')[-which(dendextend::get_nodes_attr(pl[.(ix),on='cmp',hd][[1]], 'leaf')), ] %>% rbind %>% data.table %>% setnames(ec('x,y')),
-              aes(x = x, y = y),
-              pch = 21,
-              size = 3,
-              fill = 'white',
-              inherit.aes = F
-            ) +
-            geom_label(
-              data = pd[.(ix),on='cmp',],
-              aes(
-                x = x,
-                y = y * .9,
-                color = group,
-                label = group
-              ),
-              family = 'mono',
-              na.rm = T,
-              show.legend = F
-            )
-        },height=fntsz*rows+125)
+          pd[.(isolate(ix())),on='cmp', `:=`(group = rbc[1],user=try(system('echo $USER',intern = T)) %>% {if(inherits(.,'try-error')) '?'else .},time=format(Sys.time(),usetz=T))]
+          pdwr();pdpr()
+        })
+        # Single click sets one item to labeler
+        output$table <- renderPrint({
+          r <-nearPoints(pd[.(isolate(ix)),on='cmp'],input$plot_click,threshold = 1,maxpoints = 1,xvar = "y",yvar = "x",allRows = F) %>% data.table
+          pdup(r,input);pdwr();pdpr()
+        })
+        # Brush sets range of items to labeler
+        output$table <- renderPrint({
+          r <- brushedPoints(pd[.(isolate(ix())),on='cmp'],input$plot_brush,xvar = "y",yvar = "x",allRows = F) %>% data.table
+          pdup(r,input);pdwr();pdpr()
+        })
+        output$plot <- renderPlot({
+          input$none;input$all;input$plot_click;input$plot_brush;ix()
+          pldr()},height=fntsz*rows+125)
         # output$labeler <- renderUI({
         #   input$pager
         #   input$plot_dbl
@@ -259,8 +245,8 @@ reg2pck.f <-
       }
     ),
     launch.browser = rstudioapi::viewer)
-  }
-f<-"d/qq/reg2pck.txt.gz"
+  };{f<-"d/qq/reg2pck.txt.gz"
 unlink(f)
 reg2pck.f(reg2trn[.(sample(cmp,10))],cg2sm=cg2sm,out = f)
 
+  }
