@@ -13,6 +13,7 @@ try(devtools::install_github('wleepang/shiny-pager-ui',Ncpus=nc))
 if(!require(magrittr)) {install.packages('magrittr',Ncpus=nc);library(magrittr)}
 tilit::ec(
 'data.table
+formatR
 h2o
 Rfast
 shinyjs
