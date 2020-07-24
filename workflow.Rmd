@@ -9,9 +9,9 @@ knitr::opts_chunk$set(
   ,paged.print=F
 )
 library(tilit);library(magrittr)
-'data.table,disk.frame,ggplot2,igraph,network,intergraph,forcats,shiny,miniUI,shinyPagerUI,dendextend,ggdendro' %>% ec %>% sapply(library,character.only = T) %>% invisible # load packages
+'data.table,disk.frame,ggplot2,igraph,network,intergraph,forcats,shiny,shinyjs,miniUI,shinyPagerUI,dendextend,ggdendro' %>% ec %>% sapply(library,character.only = T) %>% invisible # load packages
 if(!dir.exists('d')) system('mkdir d && (cd d && mkdir q d p b)') # create data directory structure if it doesn't exist
-setDTthreads(threads = 1) # binder limits combined cpu load to 1 core's worth, so core use should be discounted
+setDTthreads(threads = 3) # binder limits combined cpu load to 1 core's worth, so core use should be discounted
 #if(parallel::detectCores()>1&getDTthreads()==1) setDTthreads(threads=2)
 nc<-getDTthreads() # for functions asking for number of cores
 nchnk<-nc*2^4
@@ -75,7 +75,7 @@ rm(f)
 #CR levels to regionalized match candidates. Processor intensive, so performed on Google Cloud server.
 f<-'d/qq/crl2reg.txt.gz'
 if(file.exists(f)){
-  crl2reg<-unique(fread(f))
+  load(sub('.txt.gz','.RData',f,fixed = T))
 } else {
   crl2reg.f<-function(thr=.1){
     crl2reg<-try(fread(f))
@@ -93,7 +93,10 @@ if(file.exists(f)){
     unique(fread(f))
   }
   crl2reg<-crl2reg.f()
+  crl2reg %<>% .[,apply(.SD,1,sort) %>% t %>% data.table %>% setnames(ec('cr,cra'))] %>% unique
+  save(crl2reg,file=sub('.txt.gz','.RData',f,fixed = T))
 }
+
 rm(f)
 ```
 
@@ -113,18 +116,17 @@ if(file.exists(f)){
 rm(f)
 ```
 
-```{r crl2crm}
-f<-'d/q/crl2crm.txt.gz'
+```{r trn2crm}
+f<-'d/q/trn2crm.txt.gz'
 if(file.exists(f)){
-  crl2crm<-fread(f,keepLeadingZeros=T)[,ix:=.I]
+  load(sub('txt\\.gz','RData',f))
 } else {
-  f %>% unlink
-  crl2crm.f<-function(){
-    
-    crt[,cro:=NULL]
-    if(anyDuplicated(crt)) crt<-unique(crt)
-    crt[,scr:=cr %>% strsplit(', ')][,l:=sapply(scr,length)] %>% setorder(-l)
-    crt[,table(l) %>% plot]
+  # f %>% unlink
+  trn2crm.f<-function(){
+    trn<-reg2trn
+    if(anyDuplicated(trn)) trn<-unique(trn)
+    trn[,scr:=cr %>% strsplit(', ')][,l:=sapply(scr,length)] %>% setorder(-l)
+    trn[,table(l) %>% plot]
     map<-function(y,dbg=F){
       if(dbg) cat(paste(y,collapse=', '))
       ix<-1:length(y)
@@ -132,7 +134,7 @@ if(file.exists(f)){
       ix<-setdiff(ix,wY)
       wV<-'^V[<0-9 ACXIDLVM]+$' %>% {ix[grep(.,y[ix])][1]} %>% {if(is.na(.)) '' else {if(wY>.) '' else .}}
       ix<-setdiff(ix,wV)
-      wP<-'^P(\\[|[0-9 CDFHILMNVX]+$)' %>% {rev(ix[grep(.,y[ix])])[1]} %>% {if(is.na(.)) '' else {if(wV>.) '' else .}}
+      wP<-'^P(\\[|[0-9 ACDFHILMNVX]+$)' %>% {rev(ix[grep(.,y[ix])])[1]} %>% {if(is.na(.)) '' else {if(wV>.) '' else .}}
       if(wV!=''&wP!='') wV<-wV:(wP-1)
       if(wP!='') wP<-ix[ix>=wP]
       ix<-setdiff(ix,wP)
@@ -144,16 +146,139 @@ if(file.exists(f)){
       of(wS) %>% {if(grepl('  +[0-9]{4}$',.)&wY!='') wD<<-sub('.+ ','',.);wS<<-sub('  .+','',.)}
       data.table(a=of(wA),y=of(wY),s=wS,d=wD,v=of(wV),p=of(wP))
     }
-    pbapply::pblapply(crt$scr,function(x) map(x) %>% fwrite(f,append = T,quote=F,sep='\t')) %>% rbindlist
-    fread(f,keepLeadingZeros=T)[,ix:=.I]
+    pbapply::pblapply(1:length(trn$scr),function(x) data.table(trn[x,.(cr)],map(trn$scr[[x]]),ix=x) %>% fwrite(f,append = T,quote=F,sep='\t'),cl=parallel::detectCores()-1) %>% unlist
+    crm<-fread(f,keepLeadingZeros=T)
+    # year
+    crm[,y:=as.integer(y)]
+    # for p treat as list; v, d, as vector
+    suppressWarnings(crm[,p:=as.list(p)][p!='',p:= pbapply::pblapply(p,function(x) x %>% strsplit(', ') %>% unlist %>% gsub('P|\\[|\\]','',.) %>% as.roman %>% as.integer,cl=3)])
+    suppressWarnings(crm[,v:= pbapply::pbsapply(v,function(x) x %>% gsub('V|\\[|\\]','',.) %>% as.roman %>% as.integer,cl=3)])
+    suppressWarnings(crm[,d:=as.list(d)][d!='',d:= paste0(y,d),by=ix][,d:=pbapply::pbsapply(d,function(x) x %>% lubridate::ymd(.) %>% as.numeric,cl=3)])
+    crm[trn,on='cr',cmp:=cmp] %>% setkey(cmp)
+    crm
   }
-  crl2crm<-crl2crm.f()
+  trn2crm<-trn2crm.f()
+  save(trn2crm,file=sub('txt\\.gz$','RData',f))
 }
-setattr(crl2crm,'lev',sub('crm','crm-lev',f))
 rm(f)
-withr::with_seed(12345,crl2crm<-crl2crm[sample(1:.N,10000)])
 ```
 
+```{r crm2pwc, paged.print=FALSE}
+f<-'d/q/crm2pwc.RData'
+if(file.exists(f)){
+  load(f)
+} else {
+  crm2pwc.f<-function(nhld=100,ntrn=500){
+    # f %>% unlink
+    # code categories
+    kls<-data.table(expand.grid(Y=0:1,D=0:1,V=0:1,P=0:1))
+    cls<-trn2crm[,.(cr,cmp,Y=is.na(y) %>% `!` %>% as.integer,D=is.na(d) %>% `!` %>% as.integer,V=is.na(v) %>% `!` %>% as.integer,P=(p!='') %>% as.integer)]
+    cls<-ec('Y,D,V,P') %>% {n<-.;cls[kls,on=n][,cls:=.SD %>% apply(1,paste0,collapse=''),.SDcols=n]}
+    cls<-cls[!is.na(cmp),]
+    cls %>% setkey(cr)
+    withr::with_package('pbapply',{
+      grpn <- uniqueN(cls$cmp);int<-floor(grpn/100);pb <- timerProgressBar(min = 0, max = grpn,char='+',width=50)
+      pwc<-cls[,.(crp={
+        if(!.GRP%%int) setTimerProgressBar(pb,.GRP)
+        utils::combn(cr,2,simplify=F)}),by=cmp]
+      setTimerProgressBar(pb,grpn)
+      closepb(pb)
+      # progress bar https://github.com/Rdatatable/data.table/issues/1409
+      n<-ec('Y,D,V,P')
+      grpn <- nrow(pwc);pb <- timerProgressBar(min = 0, max = grpn,char='+',width=50)
+      pwc[,(n):=NA_integer_][,ix:=.I][,u:=!ix%%100]
+      setTimerProgressBar(pb,0)
+      t<-Sys.time()
+      pwc[,(n):={
+        if(u) if(difftime(Sys.time(),t)>1) {setTimerProgressBar(pb,.GRP);t<<-Sys.time()}
+        cls[.(unlist(crp)),.SD %>% apply(2,sum) %>% as.list,.SDcols=n]}
+        ,by=ix] %>% setkey(Y,D,V,P)
+      setTimerProgressBar(pb,grpn)
+      closepb(pb)
+    })
+    pwc[,ec('ix,u'):=NULL]
+    
+    # partition
+    pwc[,par:=.SD %>% sapply(function(x) as.integer(x==2)) %>% apply(1,paste0,collapse='') %>% factor %>% forcats::fct_infreq(.),.SDcols=ec('Y,D,V,P')]
+    rnorm(1);seed<-.Random.seed[1]
+    withr::with_seed(seed=seed,{
+      pwc[,mls:=c(rep('trn',ntrn),rep('hld',nhld),rep('prd',(.N-(ntrn+nhld)) %>% {ifelse(.<0,0,.)}))[1:.N] %>% sample,by=par]
+    })
+    setattr(pwc,'seed',seed)
+    pwc[,mls:=mls %>% factor %>% forcats::fct_infreq(.) %>% forcats::fct_rev(.)]
+    setattr(pwc,'mlstab',pwc[,table(par,mls) %>% addmargins %>% {cbind(.,'1%'=ceiling(.01*.[,ncol(.)]))}])
+    attr(pwc,'mlstab')
+    pwc
+  }
+  crm2pwc<-crm2pwc.f()
+  save(crm2pwc,file=f)
+}
+rm(f)
+attr(crm2pwc,'mlstab')
+```
+
+```{r pwc2mlm}
+f<-'d/q/pwc2mlm.RData'
+if(file.exists(f)){
+  load(f)
+} else {
+  pwc2mlm.f<-function(){
+    
+    # features anon nchar1/2 pa1/2 cr,a,s(jw/ds/lcs) dfy dfd dfv dfp 
+    Y<-D<-V<-function(x){x %>% unlist %>% diff %>% abs}
+    P<-function(x){do.call(outer,args=c(x,FUN='-')) %>% abs %>% min}
+    setkey(trn2crm,cr)
+    mmf<-function(var,dat=crm2pwc) trn2crm[dat$crp %>% unlist,get(var)] %>% matrix(ncol=2,byrow = T)
+    
+    # anon both strings anonymous
+    crm2pwc[,anon:=sapply(crp,function(x) x %>% unlist %>% grepl('[ANONYMOUS]',.,fixed = T) %>% {if(sum(.)==2) 1 else 0})]
+    
+    # nchar1/2 raw string lengths
+    crm2pwc[,ec('nchs,nchl'):=mmf('cr') %>% nchar %>% data.table]
+    # pra1/2 proportion of alpha
+    crm2pwc[,ec('pa1,pa2'):=mmf('cr') %>% apply(2,stringr::str_count,'[A-Za-z]') %>% data.table]
+    crm2pwc[,pa1:=pa1/nchs][,pa2:=pa2/nchl]
+    # order so shorter first and longer second
+    {n<-ec('nchs,nchl,pa1,pa2');crm2pwc[,(n):=.SD %>% apply(1,function(x) order(x[1:2]) %>% {x[c(.,.+2)]}) %>% t %>% data.table,.SDcols=n]}
+    
+    # cr,a,s(jw/ds/lcs) string distances
+    for(vr in ec('cr,a,s')) {
+      crm2pwc[,paste0(vr,'jw'):=mmf(..vr) %>% {stringdist::stringdist(a=.[,1],b=.[,2],method='jw',p=.1)}] 
+      crm2pwc[,paste0(vr,'sd'):=mmf(..vr) %>% {stringdist::stringdist(a=.[,1],b=.[,2])}] 
+      crm2pwc[,paste0(vr,'lc'):=mmf(..vr) %>% {stringdist::stringdist(a=.[,1],b=.[,2],method='lcs')}] 
+    }
+    
+    # dfy 
+    crm2pwc[.(2),on='Y',dfy:=mmf('y',.SD) %>% apply(1,..Y)]
+    # dfd 
+    crm2pwc[.(2),on='D',dfd:=mmf('d',.SD) %>% apply(1,..D)]
+    # dfv 
+    crm2pwc[.(2),on='V',dfv:=mmf('v',.SD) %>% apply(1,..V)]
+    # dfp 
+    crm2pwc[.(2),on='P',dfp:=mmf('p',.SD) %>% apply(1,..P)]
+    
+    crm2pwc
+  }
+  pwc2mlm<-pwc2mlm.f()
+  save(pwc2mlm,file=f)
+}
+rm(f)
+```
+
+```{r trn2sup}
+f <- "d/qq/trn2sup.txt.gz"
+if(file.exists(f)){
+  trn2sup<-fread(f)
+} else {
+  if(!'reg2trn'%in%ls()) load('d/q/reg2trn.RData')
+  if(!'crm2pwc'%in%ls()) load('d/q/crm2pwc.RData')
+  if(!'cg2sm'%in%ls()) load('d/p/cg2sm.RData')
+}
+  source('app.R')
+  #unlink(f)
+  trn2sup.f(reg2trn,cg2sm,fntsz='auto',aspect=1.5,out = f,samp=crm2pwc[ec('hld,trn'),on='mls',unique(cmp) %>% sort %>% {.[seq(1,length(.),by=100)[1:20]]}]) 
+rm(f)
+```
 
 ```{r crm2fuz}
 f<-'d/q/crm2fuz.RData'
@@ -189,11 +314,11 @@ if(file.exists(f)){
       }
       r
     }
-    crl2crm[,cr:=apply(.SD,1,function(x) x %>% unique %>% clp),.SDcols=!'ix']  # some original records did have redundant author and source, so will have to fix this later with accurate levels import
+    trn2crm[,cr:=apply(.SD,1,function(x) x %>% unique %>% clp),.SDcols=!'ix']  # some original records did have redundant author and source, so will have to fix this later with accurate levels import
     ## try three different ways to regionalize ##
     ## sample to choose thresh
     tgt<-list(tgt=nsamp,apx=apprx[1])
-    withr::with_seed(12345,sel<-crl2crm[,{
+    withr::with_seed(12345,sel<-trn2crm[,{
       tgt %>% {slv(.[['tgt']])[.[['apx']],'vertices']} %>% 
         sample(x=sub('[ANONYMOUS], ','',cr,fixed=T)) %>% combn(m=2) %>% t %>% data.table %>% setnames(ec('a,b')) %>% 
         .[,.(s=a,r=b,jwd=do.call(what = stringdist::stringdist,c(.SD,method='jw',p=0)))]
@@ -206,8 +331,8 @@ if(file.exists(f)){
       geom_text(data=d[c(1,which(!!c(0,diff(g))|!!c(0,diff(k2))),.N),lab:=paste(sep='\n',round(jwd,5),s,r)][,fnt:=(1:2)[(jwd==thr)+1]][],aes(label=lab,fontface=fnt),hjust='inward')
     if(!is.null(thr)) p<-p+annotate(geom='hline',yintercept=thr,color='white') + annotate(geom='text',x=0,y=thr,label=paste('Manual thr:',round(thr,3)),color='white',hjust='inward')
     # first, adist on jw p=.1, make edgelist, extract components
-    crl2crm[,cra:={m<-character(.N);pbapply::pbsapply(1:.N,function(i) m[i]<<-setdiff(cr[-i],m[i]) %>% {.[stringdist::amatch(x = cr[i],table = .,method = 'jw',maxDist = thr,nomatch = NA_character_)]});m}]
-    cel<-crl2crm[!is.na(cra),.(s=cr,r=cra,jwd=mapply(stringsim,a=cr,b=cra,method='jw',p=0))][!!(jwd-1),data.table(.SD %>% apply(1,sort) %>% t,jwd) %>% setnames(ec('s,r,jwd')),.SDcols=!'jwd'] %>% unique %>% setorder(-jwd)
+    trn2crm[,cra:={m<-character(.N);pbapply::pbsapply(1:.N,function(i) m[i]<<-setdiff(cr[-i],m[i]) %>% {.[stringdist::amatch(x = cr[i],table = .,method = 'jw',maxDist = thr,nomatch = NA_character_)]});m}]
+    cel<-trn2crm[!is.na(cra),.(s=cr,r=cra,jwd=mapply(stringsim,a=cr,b=cra,method='jw',p=0))][!!(jwd-1),data.table(.SD %>% apply(1,sort) %>% t,jwd) %>% setnames(ec('s,r,jwd')),.SDcols=!'jwd'] %>% unique %>% setorder(-jwd)
     g<-graph_from_edgelist(cel[,.SD %>% as.matrix,.SDcols=ec('s,r')],F) %>% {E(.)$weight<-cel$jwd;.}
     cmp<-components(g) %>% {data.table(cr=V(g)$name,m=membership(.) %>% factor %>% forcats::fct_infreq(.) %>% as.integer)}
     cel[,cmp:=..cmp[s,on='cr',m]]
