@@ -13,12 +13,12 @@ try(devtools::install_github('wleepang/shiny-pager-ui',Ncpus=nc))
 if(!require(magrittr)) {install.packages('magrittr',Ncpus=nc);library(magrittr)}
 tilit::ec(
 'data.table
+lspline
 ggiraph
 reactlog
 raster
 rgdal
 formatR
-h2o
 Rfast
 shinyjs
 ggdendro
@@ -58,3 +58,8 @@ sna',s='\n') %>% {
   #load<-intersect(.,installed.packages() %>% rownames)
   install.packages(inst,Ncpus=nc)
 }
+# h2o https://docs.h2o.ai/h2o/latest-stable/h2o-r/docs/articles/getting_started.html
+for (pkg in c("RCurl","jsonlite")) {
+  if (! (pkg %in% rownames(installed.packages()))) { install.packages(pkg) }
+}
+install.packages("h2o", type="source", repos=(c("http://h2o-release.s3.amazonaws.com/h2o/latest_stable_R")))

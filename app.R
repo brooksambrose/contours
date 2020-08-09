@@ -14,15 +14,15 @@
 #' @param cache
 #' @param dcache
 #' @param brwsr FALSE opens in RStudio browser, TRUE in system browser, rstudioapi::viewer in viewer pane
-#' @param gather time in seconds to delay plotting while multiple clicks are gathered (disabled, not working)
+#' @param space
 #'
-#' @import data.table tilit shiny miniUI shinyPagerUI ggplot2 dendextend ggdendro
+#' @import data.table tilit shiny miniUI shinyPagerUI ggplot2 dendextend ggdendro ggiraph
 #' @return
 #' @export
 #'
 #' @examples
 trn2sup.f <- function(reg2trn, cg2sm, out = NULL, thr = 0.1, fntsz = "auto",raster=F,
-  maxlist = Inf, samp = F, aspect = 1.5,cache=NULL,dcache=F,brwsr=F,gather=1) {
+  maxlist = Inf, samp = F, aspect = 1,space=1.5,cache=NULL,dcache=F,brwsr=F,hd=400) {
   reg2trn <- copy(reg2trn) %>% {
     if (samp[1] == FALSE)
       . else if (length(samp) == 1)
@@ -55,49 +55,63 @@ trn2sup.f <- function(reg2trn, cg2sm, out = NULL, thr = 0.1, fntsz = "auto",rast
         sd <- stringdist::stringdistmatrix(cr, method = "jw", p = thr,
           useNames = "strings")
         hc <- sd %>% hclust
-        hc$height %<>% {
-          scales::rescale_max(., to = c(0, max_depth(hc %>% as.dendrogram))) *
-            2
-        }
+        hc$height %<>% scales::rescale(.,to=c(.01,1)) #{scales::rescale_max(., to = c(0, max_depth(hc %>% as.dendrogram))) *2}
         hd <- hc %>% as.dendrogram
         hd <- seriate_dendrogram(hd, sd)
         hs <- get_nodes_attr(hd, "height", simplify = T)
-        l <- which(hs == 0)
-        n <- which(hs != 0)
+        l<-get_nodes_attr(hd, "leaf", simplify = T)
+        n <- which(is.na(l))
+        l <- which(l)
         oc <- sapply(as.list(l), function(x) hs[n[which.max(which(n < x))]])
         names(oc) <- labels(hd)
         c <- num2vir(oc, option = "E", end = 0.5)
         p <- dendro_data(hd, type = "triangle") %>% {
           .$leaf_labels <- .$labels
-          .$labels$label %<>% as.character %>% gsub(".", " ", .)
           .$segments$yend %<>% {
-            .[!.] <- -2
+            .[!.] <- -.1
             .
           }
           .$labels$y %<>% {
-            .[!.] <- -2
+            .[!.] <- -.1
             .
           }
           .
         } %>% {
           n <- nrow(.$labels)
           p <- ggdendrogram(., labels = T, leaf_labels = T, rotate = F,
-            color = c, family = "mono", size = fntsz/ggplot2:::.pt,
-            nudge_y = -3)
+            color = c, family = "mono", size = fntsz/ggplot2:::.pt,alpha=0
+            ,theme_dendro = F
+          )
           p$layers[[3]]$aes_params$angle <- 0
-          p + coord_flip(clip = "off", xlim = c(n, 1), ylim = c(-max(nchar(.$labels$label)) -
-              5, max(.$segments[, ec("y,yend")]))) + scale_y_continuous(position = "right",
-                expand = expansion(add = 1)) + scale_x_continuous(expand = expansion(add = 1)) +
-            cowplot::theme_nothing() + theme(axis.text.y = element_text(angle = 0,
-              margin = margin(t = 0, r = 2, b = 0, l = 0, unit = "native"),
-              family = "mono", size = fntsz/ggplot2:::.pt), axis.text.x = element_blank(),
-              aspect.ratio = aspect)
+          p <- p +
+            coord_flip(
+              clip = "off", xlim = c(n, 1)
+            ) +
+            scale_x_continuous(
+              breaks=1:n,labels=.$leaf_labels$label # %>% gsub('.','|',.)
+            ) +
+            cowplot::theme_nothing(
+              font_size = fntsz,font_family = 'mono',rel_small = 1
+            ) +
+            # theme_bw(base_size = fntsz,base_family = 'mono') +
+            theme(
+              axis.text.y = element_text(angle = 0,hjust=1,color='darkgray'
+                ,margin=margin(t = 0, r = .05, b = 0, l = 0, unit = "npc")
+              )
+              ,aspect.ratio = n/8
+              #,plot.margin = unit(c(fntsz,0,fntsz,0),'points')
+              #,panel.border=element_rect(fill = NA)
+            )
+          p
         }
         if(difftime(Sys.time(),t)>1) {setTimerProgressBar(pb,.GRP);t<<-Sys.time()}
         r<-data.table(pl=list(p) #, hd=list(hd)
           ,md=dendextend::max_depth(hd)
           ,nlv=dendextend::nleaves(hd)
-          ,nds=list(dendextend::get_nodes_xy(hd, type = "triangle") %>% rbind %>% data.table %>% setnames(ec("x,y")) %>% .[,lf:=dendextend::get_nodes_attr(hd,"leaf")])
+          ,nds=list(dendextend::get_nodes_xy(hd, type = "triangle") %>%
+              rbind %>% data.table %>% setnames(ec("x,y")) %>%
+              .[,lf:=dendextend::get_nodes_attr(hd,"leaf") %>% {replace(.,is.na(.),F)}] %>%
+              .[,did:=paste(round(x,3),round(y,3),sep=',')])
           ,hk=list(dendextend::heights_per_k.dendrogram(hd))
         )
         r[,hkm:=lapply(hk,function(x) dendextend::cutree(hd,k=x %>% names %>% as.integer,order_clusters_as_data = F,use_labels_not_values = F))]
@@ -110,13 +124,14 @@ trn2sup.f <- function(reg2trn, cg2sm, out = NULL, thr = 0.1, fntsz = "auto",rast
     save(pl, file = pls)
   }
 
-  rbc <- c(LETTERS %>% head(5), "_")
+  rbc <- c(LETTERS %>% head(5), "–")
   if (file.exists(out)) {
     pd <- fread(out, strip.white = F)
   } else {
     pd <- pl[, .(pd = lapply(pl, function(p) {
       pd <- p$plot_env$data$leaf_labels %>% data.table
-      pd[, `:=`(group, last(rbc))]
+      pd[, `:=`(group, '_')]
+      pd[,did:=paste(round(x,3),round(y,3),sep=',')]
       pd
     })), by = cmp] %>% apply(1, function(x) data.table(cmp = x[[1]],
       x[[2]])) %>% rbindlist
@@ -125,7 +140,7 @@ trn2sup.f <- function(reg2trn, cg2sm, out = NULL, thr = 0.1, fntsz = "auto",rast
         str = str, deg = deg, mut = round(mut, 1))]
   }
   # calculate plot height and width in pixels
-  pl[pd[,.(ht={(.N > 2) * fntsz * aspect * .N} %>% ceiling %>% `+`(10)),by=cmp],on='cmp',height:=ht]
+  pl[pd[,.(ht={(.N > 2) * fntsz * aspect * .N * space} %>% ceiling %>% `+`(10)),by=cmp],on='cmp',height:=ht]
   pl[pd[, .(wd=label %>% as.character %>%
       nchar %>% max),by=cmp],on='cmp',width:=ceiling(wd * fntsz) + md * 2]
   setkey(pd, cmp)
@@ -134,47 +149,78 @@ trn2sup.f <- function(reg2trn, cg2sm, out = NULL, thr = 0.1, fntsz = "auto",rast
     if (pd[, all(is.na(.SD)), .SDcols = "time"])
       1 else pd[max(which(time != "")), which(cp == cmp)]
   } else 1
-  # generate rasters
-  if(raster) pl[height>10,rst:=list({
-    tmp<-tempfile(fileext = '.png')
-    ggsave(filename = tmp,plot = pl[[1]],width = width/72,height=height/72,units='in',dpi = 72)
-    list(grid::rasterGrob(png::readPNG(tmp), interpolate=TRUE))
-  }),by=cmp]
   # assign groups
-  pd[, `:=`(group, factor(group, levels = rbc %>% sort))]
+  pd[, `:=`(group, factor(group, levels = rbc %>% c('_')))]
+  # set key
+  setkey(pd,cmp,x,did)
+  pd[,xi:=.I]
+
   # output functions
-  pdup <- function(r, input, ix) {
-    pd[data.table(cmp = ix, r[, .(x, y)]), on = ec("cmp,x,y"), `:=`(group = isolate(input$labeler),
-      user = try(system("echo $USER", intern = T)) %>% {
-        if (inherits(., "try-error"))
-          "?" else .
-      }, time = format(Sys.time(), usetz = T))]
+  pdup <- function(ix,d_id,lab) {
+    pd[CJ(cmp=ix,did=d_id,sorted=F),on=ec('cmp,did'), `:=`(group = lab,
+      user = usr(), time = tme())]
   }
   pdwr <- function() {
-    fwrite(x = pd %>% setkey(cmp), file = out, quote = F, sep = "\t")
+    fwrite(x = pd %>% setorder(cmp), file = out, quote = F, sep = "\t")
   }
   pdpr <- function(ix) {
-    withr::with_options(list(width = 10000), prnablank(pd[.(ix), on = "cmp",
-      !ec("x,y,cmp")]))
+    withr::with_options(list(width = 10000), prnablank(
+      pd[.(ix), on = 'cmp',!ec("x,y,cmp,did,xi")]))
     cat("\n\n")
   }
   pldr <- function(ix) {
-    if (pl[.(ix), on = "cmp",  nlv== 2])
-      return(qplot(geom = "blank"))
-    p<-pl[.(ix), on = "cmp", pl][[1]]
-    if(raster) p$layers<-(ggplot()+pl[.(ix),on='cmp',pl[[1]]$coordinates$limits %>% {do.call(annotation_custom,list(grob=rst[[1]]
-      #,xmin = .$x[1], xmax = .$x[2], ymin = .$y[1], ymax = .$y[2]
-      ,xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = Inf
-    ))}])$layers
-    p + geom_point(data = pl[.(ix),nds[[1]][is.na(lf)]], aes(x = x, y = y), pch = 21, size = 3,
-      fill = "white", inherit.aes = F) + geom_label(data = pd[.(ix),
-        on = "cmp", ], aes(x = x, y = y - 2, fill = group, label = group),
-        color = "white", family = "mono", na.rm = T, show.legend = F) +
-      discrete_scale(aesthetics = "fill", scale_name = "trainer",
-        palette = function(n) c("pink", RColorBrewer::brewer.pal(n -
-            1, name = "Dark2")), name = "Groups", drop = F)
+    if (pl[.(ix), on = "cmp",  nlv== 2]) return(qplot(geom = "blank"))
+    p<-pl[.(ix), on = "cmp", pl[[1]] +
+        geom_point_interactive(
+          data = nds[[1]][!(lf)]
+          , aes(x = x, y = y, data_id=did)
+          , pch = 21, size = 3,fill = "white", inherit.aes = F
+        )] +
+      geom_label_interactive(
+        data = pd[.(ix),on = "cmp", ]
+        , aes(x = x, y = y - .1
+          , fill = group, label = group, data_id=did)
+        ,color = "white", family = "mono", na.rm = T, show.legend = F
+      ) +
+      discrete_scale(aesthetics = "fill", scale_name = "trainer"
+        ,palette = function(n) c(RColorBrewer::brewer.pal(n-2, name = "Dark2"),'pink' %>% rep(2))
+        , name = "Groups", drop = F)
+    p
   }
-  # https://gist.github.com/jcheng5/0beeaf94468814dc35f3
+  pldd <- function(ix) {
+    renderGirafe(expr=girafe(ggobj={
+      if(
+        (!'time'%in%names(pd))|(length(pd$cmp %>% {.[.<ix]} %>% unique)<3)
+      ) return(
+        ggplot() + cowplot::theme_nothing()
+      )
+      d<-pd[
+        ,suppressWarnings(max(lubridate::ymd_hms(time),na.rm=T)) %>%
+          data.table(first(.N)) %>% setnames(ec('l,n')),by=cmp][cmp<ix]
+      d[,xi:=.I][,t:=c(NA,diff(l))]
+      d[,sess:=as.logical(t%/%(10*60))] # session start
+      d[1,sess:=TRUE]
+      d[,sesi:=cumsum(sess)] # session id
+      d[,t:=replace(t,sess,{sum(t[!sess])/sum(n[!sess])}*n[sess]) %>% round]
+      d[,cmt:=sapply(xi,function(x) weighted.mean(t[1:x],n[1:x]))]
+      ts<-d[,paste(sep='',first(l) %>% format('%b %d %I:%M %p%n') %>% gsub(' 0',' ',.),l %>% range %>% diff %>% round(2),' mins'),by=sesi]$V1
+      d[,lm(t~xi,weights=1/n) %>% {
+        ggplot(aes(x=xi,y=t),data=.)+
+          annotate_interactive('segment',x=xi[sess]-.5,xend=xi[sess]-.5,y=0,yend=.95*max(t),color='gray',size=1)+
+          annotate_interactive('text',x=xi[sess]-.5,y=max(t),label=ts,color='gray',hjust='inward')+
+          geom_smooth_interactive(formula=y~x,data=.SD[-.N],aes(weight=1/n,group=factor(sesi),tooltip=stat(round(y,1))),color='red',linetype='dashed',method='lm',se = F,size=1)+
+          geom_line_interactive(aes(y=cmt,data_id=xi,tooltip=cmt),color='green',size=1,linetype='dotted')+
+          geom_smooth_interactive(formula=y~x,aes(weight=1/n,group=factor(sesi),tooltip=stat(round(y,1))),color='blue',method='lm',se = F,size=1)+
+          geom_point_interactive(aes(size=n,color=abs(.stdresid),tooltip=n))+theme_dark(base_family = 'serif')+
+          theme(legend.position = 'none',panel.grid.major.x = element_blank(),panel.grid.minor.x = element_blank(),panel.grid.minor.y = element_blank())+
+          scale_color_viridis_c(direction=1,option = 'plasma',limits=qnorm(p=c(.01,.99)))+
+          ylab(NULL)+xlab(NULL)+scale_x_continuous(labels=cmp,breaks=xi)
+      }]
+    },height=hd/72,width=wd/72))
+  }
+  usr<-function() {try(system("echo $USER", intern = T)) %>% {if (inherits(., "try-error")) "?" else .}}
+  tme<-function() {format(Sys.time(), usetz = T)}
+
   onStop(function() {
     cat("\nSupervised training sets saved to:", out)
     close(lf)
@@ -182,170 +228,106 @@ trn2sup.f <- function(reg2trn, cg2sm, out = NULL, thr = 0.1, fntsz = "auto",rast
   })
   lf<-file(description = sub('.txt.gz','-log.txt',f,fixed = T),open = 'a')
   cache<-diskCache(dir=cache,logfile=lf)
-
+  wd<-hd*16/9
   runApp(shinyApp(
-    ui = fluidPage(uiOutput("title"), miniButtonBlock(actionButton("none",
-      "None", width = "60px"), actionButton("all", "All", width = "60px"),
-      pageruiInput("pager", page_current = pc, pages_total = pd[, uniqueN(cmp)]),
-      radioButtons("labeler", "Groups", rbc, selected = "A", inline = T,
-        width = "300px")), div(style = "text-align:center;margin: auto;max-height:500px;overflow-y:scroll;max-width:900px;overflow-x:scroll;",
-          plotOutput("plot", brush = brushOpts("plot_brush", clip = F, delayType = "debounce",
-            direction = "y", resetOnNew = T, delay = 10000), click = clickOpts("plot_click",
-              clip = F), dblclick = dblclickOpts("plot_dbl", clip = F), height = "auto",
-            inline = F)), br(), verbatimTextOutput("table"),plotOutput('dplot',width='100%',height='200px'))
-    , server = function(input,
-      output, session) {
-      # observers will execute in the order they are given
-      p <- 0
-      ## 1 input$plot_dbl input$labeler
+    ui = fluidPage(
+      tags$head( tags$style(type="text/css", "text { white-space: pre; }"))
+      ,uiOutput("title"), div(style = "text-align:center;",miniButtonBlock(
+        fluidRow(column(6,actionButton("none","None",width = '100%')),column(6,actionButton("all", "All",width = '100%')))
+        ,column(1)
+        ,pageruiInput("pager", page_current = pc, pages_total = length(cp))
+        ,column(1)
+        ,radioButtons("labeler", "Groups", rbc, selected = first(rbc), inline = T)
+      ))
+      , div(style = "text-align:center;margin: auto;max-height:500px;overflow-y:scroll;max-width:900px;overflow-x:scroll;"
+        ,uiOutput('girOut')
+      )
+      , br(), verbatimTextOutput("table"),girafeOutput('dplot',width=sprintf('%spx',wd),height=sprintf('%spx',hd)))
+    , server = function(input,output, session) {
       init1<-F
       init0<-F
-      observeEvent(label = "dbl->labeler",input$plot_dbl, {
-        updateRadioButtons(session, inputId = "labeler", selected = rbc[(which(isolate(input$labeler) ==
-            rbc) + 1) %>% {
-              j <- .
-              (length(rbc) + 1) %>% {
-                (j%/%.) + (j%%.)
-              }
-            }])
-      },ignoreInit=init1,ignoreNULL=init1, priority = p)
-      #p %<>% -1
+      # use to update output$plot in a variety of contexts, only use in observeEvent and eventReactive
+      sops<-list(opts_selection(type='single',css=girafe_css(css="fill:red;stroke:white;",text="color:red;stroke:none;")))
+      rG<-function() renderGirafe({isolate({
+        pl[.(i$x),girafe(
+          ggobj = pldr(i$x)
+          ,width_svg=width/72,height_svg=height/72
+          ,options = sops
+        )]
+      })})
       ## 2 input$pager i$x pager changes -> update global reactive index then
       ## redraw plot reprint table title
-      i <<- reactiveValues()
+      i <- reactiveValues(x=cp[pc])
+
+      output$title <- renderUI({
+        tagList(miniTitleBar(sprintf("Component %s", i$x)))
+      })
+
       observeEvent(label = 'pager->index',input$pager, {
-        i$x <- cp[isolate(input$pager$page_current)]
-      },ignoreInit=init0,ignoreNULL=init0, priority = p)
-      p %<>% -1
+        i$x<<-cp[input$pager$page_current]
+      },ignoreInit=T,ignoreNULL=T,priority = 3)
 
       observeEvent(label = "reset labeler",i$x, {
-        updateRadioButtons(session, inputId = "labeler", selected = first(rbc))
-      },ignoreInit=init1,ignoreNULL=init1, priority = p)
-      #p %<>% -1
+        if(input$labeler!=first(rbc)) updateRadioButtons(session, inputId = "labeler", selected = first(rbc))
+      },ignoreInit=T,ignoreNULL=init1,priority=1)
 
-      observeEvent(label = 'title',i$x, {
-        output$title <- renderUI({
-          tagList(miniTitleBar(sprintf("Component %s", pd[.(isolate(i$x)),
-            cmp[1]])))
-        })
-      },ignoreInit=init1,ignoreNULL=init1,priority = p)
-      #p %<>% -1
 
-      observeEvent(label = 'index->table',i$x, {
-        output$table <- renderPrint({
-          pdpr(isolate(i$x))
-        })
-      },ignoreInit=init1,ignoreNULL=init1, priority = p)
-      p %<>% -1  # won't work without observer
+      output$table <- renderPrint({
+        pdpr(i$x)
+      })
 
       ## 3 input$plot_click output$table
-      observeEvent(label = 'click',input$plot_click, {
-        output$table <- renderPrint({
-          nd <- pl[.(isolate(i$x)), on = "cmp", nds[[1]]]
-          r <- nearPoints(nd, isolate(input$plot_click), threshold = Inf,
-            maxpoints = 1, xvar = "y", yvar = "x", allRows = F) %>%
-            data.table
+      observeEvent(label = 'click',input$plot_selected, {
+        output$table <- renderPrint({isolate({
+          ips<-input$plot_selected
+          nd<-copy(pl[.(i$x),nds[[1]]])
+          r<-nd[.(ips),on='did',list(x=x,y=y)]
           # branch node selected
-          if (r$y) {
-            nd[(lf), `:=`(k, {pl[.(isolate(i$x)), on = "cmp",
+          if (!grepl(',0$',ips)) {
+            nd[(lf),k:=pl[.(i$x), on = "cmp",
               (hk[[1]]-r$y) %>% abs %>% which.min %>% {hkm[[1]][,.-1]}
-            ]}
-            )]
-            r <- nd[(lf), .(b = do.call(between, c(r$x, as.list(range(x))))),
-              by = k] %>% .[(b), k] %>% {
-                nd[.(.), on = "k", !"k"]
-              }
+            ]]
+            ips <- nd[(lf), .(b = do.call(between, c(r$x, as.list(range(x))))),by = k] %>%
+              .[(b), k] %>% {nd[.(.), on = "k", did]}
           }
-          pdup(r, input, isolate(i$x))
-          pdwr()
-          pdpr(isolate(i$x))
-        })
-      },ignoreInit=init1,ignoreNULL=init1, priority = p)
-      #p %<>% -1
+          if(!is.null(ips)) {
+            pdup(i$x,ips,input$labeler);pdwr()}
+          pdpr(i$x)
+        })})
+        output$plot <- rG()
+      },ignoreInit=init1,ignoreNULL=T, priority = 2)
 
       ## 6 input$all output$table
       observeEvent(label = 'all',input$all, {
-        output$table <- renderPrint({
-          pd[.(isolate(i$x)), on = "cmp", `:=`(group = rbc[1], user = try(system("echo $USER",
-            intern = T)) %>% {
-              if (inherits(., "try-error"))
-                "?" else .
-            }, time = format(Sys.time(), usetz = T))]
-          pdwr()
-          pdpr(isolate(i$x))
-        })
-      },ignoreInit=init1,ignoreNULL=init1, priority = p)
-      #p %<>% -1
+        b<-pd[.(i$x), on = "cmp",group]
+        pd[.(i$x), on = "cmp", `:=`(group = rbc[1], user = usr(), time = tme())]
+        pdwr()
+        output$table <- renderPrint(pdpr(i$x))
+        if(pd[.(i$x), on = "cmp",!identical(group,(b))]) output$plot <- rG()
+      },ignoreInit=T,ignoreNULL=T, priority = 2)
+
       ## 8 input$none output$table
       observeEvent(label = 'none',input$none, {
-        output$table <- renderPrint({
-          pd[.(isolate(i$x)), on = "cmp", `:=`(group = tail(rbc,
-            1), user = try(system("echo $USER", intern = T)) %>%
-              {
-                if (inherits(., "try-error"))
-                  "?" else .
-              }, time = format(Sys.time(), usetz = T))]
-          pdwr()
-          pdpr(isolate(i$x))
+        b<-pd[.(i$x), on = "cmp",group]
+        pd[.(i$x), on = "cmp", `:=`(group = last(rbc), user = usr(), time = tme())]
+        pdwr()
+        output$table <- renderPrint(pdpr(i$x))
+        if(pd[.(i$x), on = "cmp",!identical(group,(b))]) output$plot <- rG()
+      },ignoreInit=T,ignoreNULL=T, priority = 2)
+
+      observeEvent(label='plot width',i$x,{
+        output$girOut<-renderUI({
+          girafeOutput('plot',height='auto',width=sprintf('%spx',pl[.(i$x),on='cmp',width]))
         })
-      },ignoreInit=init1,ignoreNULL=init1, priority = p)
-      #p %<>% -1
-      ## 10 input$plot_brush output$table
-      observeEvent(label = 'brush',input$plot_brush, {
-        output$table <- renderPrint({
-          r <- brushedPoints(pd[.(isolate(i$x)), on = "cmp"], isolate(input$plot_brush),
-            xvar = "y", yvar = "x", allRows = F) %>% data.table
-          pdup(r, input, isolate(i$x))
-          pdwr()
-          pdpr(isolate(i$x))
-        })
-      },ignoreInit=init1,ignoreNULL=init1, priority = p)
-      p %<>% -1
+      })
 
       #https://groups.google.com/forum/#!topic/shiny-discuss/EjEJE6_ZMvU
+      observeEvent(label='plot',i$x,{
+        output$plot <- rG()
+      },ignoreInit = F,ignoreNULL = T,priority = -1)
 
-      t<-Sys.time()
-      Sys.sleep(gather)
-      plt <-eventReactive(label = 'plot',{
-        input$plot_click
-        input$plot_brush
-        input$none
-        input$all
-        i$x
-      }, {
-        session$resetBrush("plot")
-        t<<-Sys.time()
-        pldr(isolate(i$x)) + theme_void()  #+ theme(panel.border = element_rect(fill=NA))
-      },ignoreInit=init1,ignoreNULL=init1#,priority = p
-      )
-      #p %<>% -1
-
-
-
-      observeEvent(label = 'plotter',{plt();if(difftime(Sys.time(),t)<gather) invalidateLater(1000)}
-        , {
-          if(difftime(Sys.time(),t)>gather) output$plot<-renderCachedPlot(
-            expr = plt()
-            ,cacheKeyExpr = pd[.(isolate(i$x)), .(label,group)]
-            ,cache=cache
-            ,sizeGrowthRatio(height = pl[.(isolate(i$x)),height], width = pl[.(isolate(i$x)),width], growthRate = 1)
-          )
-        }
-        ,priority = p)
-
-
-      observeEvent(label = 'brndwn',i$x, {
-        output$dplot <- renderCachedPlot(expr = {
-          d<-fread(out)
-          if(!'time'%in%names(d)|length(d$cmp %>% {.[.<isolate(i$x)]} %>% unique)<3) return(geom_blank())
-          d<-d[,max(lubridate::ymd_hms(time),na.rm=T) %>%  data.table(first(.N)) %>% setnames(ec('l,n')),by=cmp][,ix:=.I][,t:=c(NA,diff(l))][,cmt:=c(NA,sapply(.I[-1],function(x) weighted.mean(t[2:x],n[2:x])))]
-          d<-d[cmp<isolate(i$x)]
-          d[-1][,lm(t~ix,weights=1/n) %>% {ggplot(aes(x=ix,y=t),data=.)+geom_smooth(data=.SD[-.N],aes(weight=1/n),color='red',linetype='dashed',method='lm',se = F,size=1)+geom_line(aes(y=cmt),color='green',size=1,linetype='dashed')+annotate(size=1,geom='segment',x=min(ix),xend=max(ix),y=min(.$fitted),yend=max(.$fitted),color='blue')+geom_point(aes(size=n,color=abs(.stdresid)))+theme_dark(base_family = 'serif')+theme(legend.position = 'none',panel.grid.major.x = element_blank(),panel.grid.minor.x = element_blank(),panel.grid.minor.y = element_blank())+scale_color_viridis_c(direction=1,option = 'plasma',limits=qnorm(p=c(.01,.99)))+ylab(NULL)+xlab(NULL)+scale_x_continuous(labels=cmp,breaks=ix)}]
-        },cacheKeyExpr = pd[cmp<isolate(i$x), time], cache=cache
-          , sizeGrowthRatio(height = 200, width = 400, growthRate = 1.25)
-        )
-      },ignoreInit=init1,ignoreNULL=init1,priority = p)
-      #p %<>% -1
-
+      observeEvent(label = 'brndwn',i$x,
+        output$dplot <- pldd(i$x)
+        ,ignoreInit=F,ignoreNULL=init1,priority = -1)
     }), launch.browser = brwsr)
 }

@@ -9,7 +9,7 @@ knitr::opts_chunk$set(
   ,paged.print=F
 )
 library(tilit);library(magrittr)
-'data.table,disk.frame,ggplot2,igraph,network,intergraph,forcats,shiny,shinyjs,miniUI,shinyPagerUI,dendextend,ggdendro' %>% ec %>% sapply(library,character.only = T) %>% invisible # load packages
+'data.table,disk.frame,ggplot2,igraph,network,intergraph,forcats,shiny,shinyjs,miniUI,shinyPagerUI,ggiraph,dendextend,ggdendro' %>% ec %>% sapply(library,character.only = T) %>% invisible # load packages
 if(!dir.exists('d')) system('mkdir d && (cd d && mkdir q d p b)') # create data directory structure if it doesn't exist
 setDTthreads(threads = 3) # binder limits combined cpu load to 1 core's worth, so core use should be discounted
 #if(parallel::detectCores()>1&getDTthreads()==1) setDTthreads(threads=2)
@@ -70,6 +70,7 @@ if(file.exists(f)){
 rm(f)
 ```
 
+## Fuzzy set replacement
 
 ```{r crl2reg}
 #CR levels to regionalized match candidates. Processor intensive, so performed on Google Cloud server.
@@ -175,7 +176,7 @@ if(file.exists(f)){
     cls<-trn2crm[,.(cr,cmp,Y=is.na(y) %>% `!` %>% as.integer,D=is.na(d) %>% `!` %>% as.integer,V=is.na(v) %>% `!` %>% as.integer,P=(p!='') %>% as.integer)]
     cls<-ec('Y,D,V,P') %>% {n<-.;cls[kls,on=n][,cls:=.SD %>% apply(1,paste0,collapse=''),.SDcols=n]}
     cls<-cls[!is.na(cmp),]
-    cls %>% setkey(cr)
+    cls %>% setorder(cmp,cr)
     withr::with_package('pbapply',{
       grpn <- uniqueN(cls$cmp);int<-floor(grpn/100);pb <- timerProgressBar(min = 0, max = grpn,char='+',width=50)
       pwc<-cls[,.(crp={
@@ -233,6 +234,9 @@ if(file.exists(f)){
     # anon both strings anonymous
     crm2pwc[,anon:=sapply(crp,function(x) x %>% unlist %>% grepl('[ANONYMOUS]',.,fixed = T) %>% {if(sum(.)==2) 1 else 0})]
     
+    # astr both strings asterisk
+    crm2pwc[,anon:=sapply(crp,function(x) x %>% unlist %>% grepl('^\\*',.,fixed = T) %>% {if(sum(.)==2) 1 else 0})]
+    
     # nchar1/2 raw string lengths
     crm2pwc[,ec('nchs,nchl'):=mmf('cr') %>% nchar %>% data.table]
     # pra1/2 proportion of alpha
@@ -267,189 +271,111 @@ rm(f)
 
 ```{r trn2sup}
 f <- "d/qq/trn2sup.txt.gz"
-unlink(f)
 if(file.exists(f)){
   trn2sup<-fread(f)
 } else {
+  # unlink(dir(pattern='trn2sup',recursive = T))
+  # rm(smp)
   if(!'reg2trn'%in%ls()) load('d/q/reg2trn.RData')
   if(!'cg2sm'%in%ls()) load('d/p/cg2sm.RData')
+  if(!'smp'%in%ls()) {load('d/q/crm2pwc.RData');smp<-crm2pwc[ec('hld,trn'),on='mls',unique(cmp) %>% sort %>% {.[seq(1,length(.),by=1)[1:100]]}
+  ];rm(crm2pwc)}
+  source('app.R')
+  options(shiny.reactlog = F)
+  options(shiny.reactlog = T)
+  trn2sup.f(
+    reg2trn,cg2sm,aspect=1,out = f,samp=smp,fntsz='auto'
+    ,dcache = T,cache = sub('\\.txt\\.gz','-cache',f) %>% {if(dir.exists(.)) . else {dir.create(.);.}}
+    ,brwsr=rstudioapi::viewer
+  )
 }
-if(!'smp'%in%ls()) {load('d/q/crm2pwc.RData');smp<-crm2pwc[ec('hld,trn'),on='mls',unique(cmp) %>% sort %>% {.[seq(1,length(.),by=100)[1:10]]}
-];rm(crm2pwc)}
-source('app.R')
-options(shiny.reactlog = TRUE)
-trn2sup.f(
-  reg2trn,cg2sm,fntsz='auto',aspect=1.5,out = f,samp=smp
-  ,dcache = T,cache = sub('\\.txt\\.gz','-cache',f) %>% {if(dir.exists(.)) . else {dir.create(.);.}}
-  ,brwsr=rstudioapi::viewer,gather=2
-)
 rm(f)
 ```
 
-
-```{r trn2sup-burndown}
-d<-fread('d/qq/trn2sup.txt.gz')[,max(lubridate::ymd_hms(time),na.rm=T) %>%  data.table(first(.N)) %>% setnames(ec('l,n')),by=cmp][,ix:=.I][,t:=c(NA,diff(l))][,cmt:=c(NA,sapply(.I[-1],function(x) weighted.mean(t[2:x],n[2:x])))]
-d[-1,lm(t~ix,weights=1/n) %>% {ggplot(aes(x=ix,y=t),data=.)+geom_smooth(data=.SD[-.N],aes(weight=1/n),color='red',linetype='dashed',method='lm',se = F,size=1)+geom_line(aes(y=cmt),color='green',size=1,linetype='dashed')+annotate(size=1,geom='segment',x=min(ix),xend=max(ix),y=min(.$fitted),yend=max(.$fitted),color='blue')+geom_point(aes(size=n,color=abs(.stdresid)))+theme_dark(base_family = 'serif')+theme(legend.position = 'none',panel.grid.major.x = element_blank(),panel.grid.minor.x = element_blank(),panel.grid.minor.y = element_blank())+scale_color_viridis_c(direction=1,option = 'inferno',limits=qnorm(p=c(.01,.99)))+ylab(NULL)+xlab(NULL)+scale_x_continuous(labels=cmp)}]
-```
-
-```{r crm2fuz}
-f<-'d/q/crm2fuz.RData'
+```{r sup2mlm}
+f<-'d/q/sup2mlm.RData'
 if(file.exists(f)){
   load(f)
 } else {
-  crm2fuz.f<-function(nsamp=1000,apprx=ec('ceiling,floor'),strict=F,plot=T,thr){
-    clp<-function(x) x %>% Filter(f = function(y) y!='') %>% paste(collapse=', ')
-    slv<- function(y,max=T,smry=T){ # solves quadratic to learn approximately how big a network corresponds to a complete edgelist of size y. Inverse to counting number of possible unordered, loopless, pairwise combinations: x(x-1)/2
-      pwc<-function(x) x*(x-1)/2
-      delta<-function(a,b,c){
-        b^2-4*a*c
+  sup2mlm.f<-function(trnthr=500){
+    trn2sup<-trn2sup[,.(fin=!all(group=='_')),by=cmp][(fin),cmp] %>%  {trn2sup[.(.),on='cmp']}
+    sup<-trn2sup[,combn(label,2) %>% apply(2,sort) %>% t %>% data.table %>% setnames(ec('cr1,cr2')),by=cmp]
+    sup[trn2sup,on='cr1==label',g1:=group]
+    sup[trn2sup,on='cr2==label',g2:=group]
+    sup[,match:=apply(.SD,1,function(x) all(x%in%LETTERS[1:6]))&(g1==g2),.SDcols=ec('g1,g2')]
+    pwc2mlm[,ec('cr1,cr2'):=crp %>% pbapply::pblapply(X = .,FUN = sort,cl=3) %>% do.call(what=rbind) %>% data.table]
+    pwc2mlm[sup,on=ec('cr1,cr2'),match:=match]
+    pwc2mlm[.('prd',T),on=ec('mls,match'),mls:='trn']
+    t<-pwc2mlm[,.(m=sum(match,na.rm = T)),by=.(par,mls)] %>% dcast(par~mls,value.var='m') %>% 
+      {data.table(.[,.(par=par %>% as.character %>% c('Sum'))],.[,!'par'] %>% as.matrix %>% addmargins)} %>% na.omit
+    via<-t[trn>trnthr,par]
+    pwc2mlm[.(via),on='par'] %>% split(by='par') %>% 
+      lapply(function(x) x[,.SD,.SDcols=which(sapply(x,function(y) y %>% is.na %>% mean %>% `==`(1) %>% `!`))])
+  }
+  sup2mlm<-sup2mlm.f()
+  save(sup2mlm,file=f)
+}
+rm(f)
+```
+
+```{r mlm2mlc}
+#' machine learning matrix 2 machine learning classifier
+#' hpt hours per training
+#' pmu proportion total memory to use
+f<-'d/q/mlm2mlc.RData'
+if(file.exists(f)){
+  load(f)
+} else {
+  # hpt hours per table
+  cat('\014')
+  mlm2mlc.f<-function(hpt=4,pmu=3/4,shutdown=F){
+    mlc<-list()
+    prd<-list()
+    withr::with_package('h2o',{
+      h2o.init(
+        nthreads=parallel::detectCores()-1
+        ,max_mem_size = 
+          system('sysctl hw.memsize',intern = T) %>% strsplit(' ') %>% {.[[1]][2]} %>% as.numeric %>% `*`(pmu) %>% {.-(.%%1024)}
+      )
+      for(i in names(sup2mlm)){
+        fn<-paste0('h2o-',i)
+        fnr<-paste0(fn,'-mlc')
+        fnrf<-sub('mlc',fnr,f)
+        if(file.exists(fnrf)) {mlc[[i]]$mod<-load(fnr);next}
+        assign(fn,as.h2o(sup2mlm[[i]]['trn',on='mls',!ec('cmp,crp,Y,D,V,P,par,mls,cr1,cr2')][!is.na(match),][,match:=factor(match)]
+          ,destination_frame = fn,use_datatable = TRUE))
+        mlc[[i]]$mod<-h2o.automl(y='match',training_frame = get(fn),verbosity = 'info',max_runtime_secs = 60*60*hpt)
+        assign(fnr,mlc[[i]]$mod)
+        save(list=fnr,file=fnrf)
+        h2o.save_mojo(object = mlc[[i]]$mod@leader,path = sub('\\.RData$','',f) %>% {if(!dir.exists(.)) {dir.create(.)};.} ,force = T)
+        mlc[[i]]$prd<-data.table(sup2mlm[[i]],mlc[[i]]$mod@leader %>% {h2o.predict(.,sup2mlm[[i]][,as.h2o(.SD),.SDcols=.@model$names])} %>% as.data.table)
+        mlc[[i]]$prd[,MaxPCC:=TRUE.>=PresenceAbsence::optimal.thresholds(na.omit(.SD)[,.(par,match,TRUE.)],opt.methods = 'MaxPCC',FPC=1,FNC=1)[,2]]
       }
-      q<-function(a,b,c){
-        if(delta(a,b,c) > 0){ # first case D>0
-          x_1 = (-b+sqrt(delta(a,b,c)))/(2*a)
-          x_2 = (-b-sqrt(delta(a,b,c)))/(2*a)
-          result = c(x_1,x_2)
-        }
-        else if(delta(a,b,c) == 0){ # second case D=0
-          x = -b/(2*a)
-        }
-        else {"There are no real roots."} # third case D<0
-      }
-      r<-q(a=1/2,b=-1/2,c=-y)
-      if(max) r<-max(r)
-      if(smry&max) {
-        r<-rbind(
-          floor=c(vertices=floor(r),edges=pwc(floor(r)))
-          ,ceiling=c(vertices=ceiling(r),edges=pwc(ceiling(r))
-          ))
-        attr(r,'edge_target')<-y
-      }
-      r
-    }
-    trn2crm[,cr:=apply(.SD,1,function(x) x %>% unique %>% clp),.SDcols=!'ix']  # some original records did have redundant author and source, so will have to fix this later with accurate levels import
-    ## try three different ways to regionalize ##
-    ## sample to choose thresh
-    tgt<-list(tgt=nsamp,apx=apprx[1])
-    withr::with_seed(12345,sel<-trn2crm[,{
-      tgt %>% {slv(.[['tgt']])[.[['apx']],'vertices']} %>% 
-        sample(x=sub('[ANONYMOUS], ','',cr,fixed=T)) %>% combn(m=2) %>% t %>% data.table %>% setnames(ec('a,b')) %>% 
-        .[,.(s=a,r=b,jwd=do.call(what = stringdist::stringdist,c(.SD,method='jw',p=0)))]
-    }]) %>% setorder(-jwd)
-    chg<-sel[,ov2chpt.f(jwd,drv = 3,warn = F)]
-    chg[,k2:=kmeans(sel$jwd,2)$cluster][,ix:=.I]
-    d<-data.table(sel,chg)[,!'x']
-    if(is.null(thr)) thr<-d[.(tail(g,1)),on='g'][if(strict) .N else 1,jwd]
-    p<-qplot(data=d,geom='line',x=ix,y=jwd,linetype=g,shape=g,color=factor(k2)) +
-      geom_text(data=d[c(1,which(!!c(0,diff(g))|!!c(0,diff(k2))),.N),lab:=paste(sep='\n',round(jwd,5),s,r)][,fnt:=(1:2)[(jwd==thr)+1]][],aes(label=lab,fontface=fnt),hjust='inward')
-    if(!is.null(thr)) p<-p+annotate(geom='hline',yintercept=thr,color='white') + annotate(geom='text',x=0,y=thr,label=paste('Manual thr:',round(thr,3)),color='white',hjust='inward')
-    # first, adist on jw p=.1, make edgelist, extract components
-    trn2crm[,cra:={m<-character(.N);pbapply::pbsapply(1:.N,function(i) m[i]<<-setdiff(cr[-i],m[i]) %>% {.[stringdist::amatch(x = cr[i],table = .,method = 'jw',maxDist = thr,nomatch = NA_character_)]});m}]
-    cel<-trn2crm[!is.na(cra),.(s=cr,r=cra,jwd=mapply(stringsim,a=cr,b=cra,method='jw',p=0))][!!(jwd-1),data.table(.SD %>% apply(1,sort) %>% t,jwd) %>% setnames(ec('s,r,jwd')),.SDcols=!'jwd'] %>% unique %>% setorder(-jwd)
-    g<-graph_from_edgelist(cel[,.SD %>% as.matrix,.SDcols=ec('s,r')],F) %>% {E(.)$weight<-cel$jwd;.}
-    cmp<-components(g) %>% {data.table(cr=V(g)$name,m=membership(.) %>% factor %>% forcats::fct_infreq(.) %>% as.integer)}
-    cel[,cmp:=..cmp[s,on='cr',m]]
-    cel[,cmp:=forcats::fct_reorder(.f = as.character(cmp),.x = jwd,.fun =function(x) -median(x)) %>% as.integer %>% factor %>% forcats::fct_infreq(.)] %>% setorder(cmp,-jwd)
-    
-    # plot first 10 variation candidate sets
-    withr::with_package('showtext',{
-      font_add_google('Wire One','Wire One')
-      showtext_auto()
-      if(plot) pdf(sub('RData$','pdf',f))
-      
-      rg<-cel[c(levels(cmp)[1:10],as.character(1:10)) %>% unique,on='cmp'
-        , list({
-          g<-graph_from_edgelist(cbind(s,r),F) %>% {E(.)$weight<-round(jwd*100);.}
-          sg<-strength(g)
-          sgi<-sg %>% {.-min(.)+1}
-          vpal<-viridis::viridis(max(sgi),option = 'viridis')
-          ew<-E(g)$weight
-          ewi<-ew %>% {.-min(.)+1}
-          epal<-viridis::viridis(max(ewi),option = 'magma',direction=-1)
-          withr::with_seed(12345,lyt<-igraph::layout_with_fr(g))
-          
-          if(plot) {
-            par(bg='gray')
-            plot.igraph(
-              g
-              ,layout=lyt
-              ,edge.color=epal[ewi]
-              ,vertex.color=vpal[sgi]  
-              ,vertex.label.family='Wire One'
-              ,vertex.size=5
-              ,vertex.label.cex=.75
-              ,main=paste('N:',.N,'C:',cmp[1],'JW:',round(100*mean(jwd)))
-              ,sub='top bar: node strength (sum of edge weights) \nbottom bar: string similarity (edge weight)'
-            )
-            plotrix::color.legend(-1,1.1,1,1.15,legend=range(sg) %>% {.[1]:.[2]} %>% {.[!.%in%sg]<-'';.},rect.col = vpal,align = 'lt',gradient='x',cex = .5,col='white',font=2)
-            plotrix::color.legend(-1,-1.15,1,-1.1,legend=range(ew) %>% {.[1]:.[2]} %>% {.[!.%in%ew]<-'';.},rect.col = epal,align = 'rb',gradient='x',cex = .5,col='white',font=2)
-          }
-          cat('.')
-          list(set_graph_attr(g,'layout',lyt))
-        }),by=cmp]$V1
-      if(plot) dev.off()
+      if(shutdown) h2o.shutdown(prompt=F) else warning('\nh2o cluster still active')
     })
-    
-    
-    # second, stringdistmatrix
-    p
+    mlc
   }
-  crm2fuz<-crm2fuz.f()
-  save(crm2fuz,file=f)
+  mlm2mlc<-mlm2mlc.f()
+  save(mlm2mlc,file=f)
 }
 rm(f)
-crm2fuz
 ```
 
-```{r dbl2fuz}
-odl<-function(f) {
-  if(interactive()) Sys.getenv('RSTUDIO_HTTP_REFERER') %>% {if(.!='')
-    paste0(
-      paste0(.,'/export/',f)
-      ,'?name=',basename(f),'&file=',paste0('~/',f)) %>% 
-      strsplit('//') %>% .[[1]] %>% {paste(.[1],paste(.[-1],collapse='/'),sep='//')} %>% 
-      browseURL
-  }}
-f<-'d/q/dbl2fuz.RData'
+```{r mlc2fuz}
+f<-'d/q/mlc2fuz.RData'
 if(file.exists(f)){
   load(f)
 } else {
-  dbl2fuz.f<-function(){
-    source('https://raw.githubusercontent.com/larmarange/JLutils/master/R/clustering.R')
-    cr<-wok2dbl['CR',on='field',val %>% toupper %>% unique %>% sort]
-    crs<-cr[1:10] %>% sub(', DOI.+','',.)
-    withr::with_package(
-      ec('stringdist')
-      ,{
-        sd<-list()
-        for(i in c("osa", "lv", "dl", "hamming", "lcs", "qgram",
-          "cosine", "jaccard", "jw", "soundex")){
-          sd[[i]]<-stringdistmatrix(crs,method=i,useNames='strings')
-          cat(i,'')
-        }
-      }
-    )
-    for(i in names(sd)) sd[[i]] %>% {if(!any(is.infinite(.),is.na(.)))
-      dendextend::seriate_dendrogram(hclust(.),.) %>% as.dendrogram(hang=0) %>% dendextend::plot_horiz.dendrogram(main=i,horiz=T,side=F)} 
+  mlc2fuz.f<-function(){
+    fuz<-lapply(names(mlm2mlc),function(x) mlm2mlc[[x]]$prd[(MaxPCC),.(zr=list(crp %>% unlist %>% unique %>% sort)),keyby=cmp])
+    fuz<-rbindlist(fuz)[,.(zr=list(zr %>% unlist %>% unique %>% sort)),keyby=cmp]
+    fuz
   }
-  dbl2fuz<-dbl2fuz.f()
-  save(dbl2fuz,file=f)
+  mlc2fuz<-mlc2fuz.f()
+  save(mlc2fuz,file=f)
 }
-odl(f)
 rm(f)
-
-r<-crs %>% strsplit(', ') %>% .[9:10] %>% expand.grid(stringsAsFactors = F) %>% {data.table(.,d=apply(.,1,function(x) stringdist::stringdist(x[1],x[2],method='jw',p=.25)))} %>% setkey(Var1,Var2) %>% {
-  r<-list()
-  l<-.
-  while(nrow(l)) {
-    r[[length(r)+1]]<-l[which.min(d)]
-    l<-l[!.(r[[length(r)]]$Var1),on='Var1']
-    l<-l[!.(r[[length(r)]]$Var2),on='Var2']
-  }
-  rbindlist(r)[,nd:=.SD[,!'d'] %>% apply(1,function(x) if(all(stringi::stri_count_regex(x,'[0-9]+')==1)) gsub('[^0-9]','',x) %>% as.integer %>% sort %>% diff else NA ) ] 
-}
-r
 ```
-
 
 # Bimodal edge list
 
@@ -463,11 +389,19 @@ if(file.exists(f)){
   wok2dbl[dbl2cro,on='val==cro',val:=cr]
   dbl2bel<-plagiat::dbl2bel.f(
     wok2dbl
-    ,out=dirname(f),trim_doi = F,trim_anon = F,trim_loops = T,capitalize = F,trim_pendants = T) %>% invisible
+    ,out=dirname(f),trim_doi = F,trim_anon = F,trim_loops = T,capitalize = F,trim_pendants = T
+    ,saved_recode = if('mlc2fuz'%in%ls()) mlc2fuz$zr else NULL
+  ) #%>% invisible
   save(dbl2bel,file=f)
   rm(wok2dbl)
 }
 r<-attributes(dbl2bel)$results
+if('zcr'%in%names(dbl2bel)) dbl2bel %<>% {
+  .[,cr:=NULL] %>% setnames('zcr','cr')
+  .[,pend:=NULL] %>% setnames('zpend','pend')
+  .[,loop:=NULL] %>% setnames('zloop','loop')
+  .[!(zdup)]
+}
 dbl2bel<-unique(dbl2bel[!(pend|loop),.(ut,cr)]) %>% setkey(ut,cr)
 dbl2bel[,`:=`(ut=factor(ut),cr=factor(cr))] %>% setkey(ut,cr)
 of<-sprintf(paste(dirname(f),'bel2mel-%s-levs.txt',sep=.Platform$file.sep),ec('ut,cr')) %>% {names(.)<-ec('ut,cr');.}
@@ -479,7 +413,6 @@ if(DF) {
   attr(dfl2bel,'results')<-r
   rm(dbl2bel)
 }
-™r
 rm(f,r)
 cpumem(plot=T)
 ```
@@ -661,6 +594,8 @@ smt %>% fwrite('d/q/smt.txt') # sequenced membership table
 smt %>% knitr::kable(.)
 ```
 
+
+
 ```{r sm2samp}
 f<-'d/q/sm2samp'
 if(dir.exists(f)){
@@ -770,7 +705,7 @@ rm(f)
 
 ```{r sm2cc}
 # Johann has to decide size cutoff for communities
-Ncut<-50
+Ncut<-6
 sm2cc<-cg2sm[.(smd[N>=Ncut]$h1),on='h1'] %>% setorder(h1,-str)
 ```
 
@@ -798,20 +733,24 @@ rm(f)
 
 
 ```{r cc2yr}
+# TODO make sure <NA> in merge aren't errors
 f<-'d/p/cc2yr.RData'
 if(file.exists(f)){
   load(f)
 } else {
   cc2yr.f<-function(){
+    # wkd<-function() {if(DF) wok2dfl else wok2dbl}
+    # if(!DF) 
     load('d/p/wok2dbl.RData')
-    load('d/p/dbl2bel-ogcr.RData')
-    ut<-wok2dbl[CJ(field='CR',val=sm2cc$id),on=ec('field,val'),id] %>% unique
+    if(!'ogcr'%in%ls()) load('d/p/dbl2bel-ogcr.RData')
+    ut<-CJ(id=wok2dbl[CJ(field='CR',val=sm2cc$id),on=ec('field,val'),id] %>% unique,field='PY') %>% na.omit
+    og<-CJ(field='CR',val=ogcr[sm2cc$id,on='t',og]) %>% na.omit
     yr<-merge(
-      wok2dbl[CJ(field='CR',val=ogcr[sm2cc$id,on='t',og]),on=ec('field,val'),.(id,cr=val)]
-      ,wok2dbl[CJ(id=ut,field='PY'),on=ec('id,field'),.(id,yr=as.integer(val))]
-      ,by='id')
+      wok2dbl[og,on=ec('field,val'),.(id,cr=val)] %>% na.omit %>% unique
+      ,wok2dbl[ut,on=ec('id,field'),.(id,yr=as.integer(val))] %>% na.omit %>% unique
+      ,by='id',allow.cartesian=TRUE)
     setnames(yr,'cr','og')
-    yr[,cr:=ogcr[og,on='og',t]]
+    yr[ogcr,on='og',cr:=t]
     rm(wok2dbl)
     rm(ogcr)
     yr<-merge(yr,sm2cc[,.(id,h1)],by.x='cr',by.y='id')[,.N,keyby=.(h1,yr)]
@@ -821,9 +760,113 @@ if(file.exists(f)){
   save(cc2yr,file=f)
 }
 rm(f)
+p<-cc2yr[,.(N=sum(N)),by=yr][,ggplot(data=.SD,aes(x=yr,y=N))+geom_line()+geom_point(color='white',size=.5)+geom_rug()]
+cowplot::plot_grid(p,p+scale_y_log10(),ncol=1)
+
+ctg<-cc2yr %>% setorder(h1,yr) %>% {.[,.(ctg=.N/{(yr %>% range %>% diff)-.N+1}),by=h1]} %>% {.[,c1:=factor(h1,levels=h1[order(ctg,decreasing = T)]) %>% as.integer]}
+cc2yr[ctg,on='h1',c1:=c1]
+
+
+hm<-list();for(v in c(T,F)){
+  h<-{ggplot(
+    copy(cc2yr)[,h1:=if(v) h1 else c1][,`:=`(id=as.character(h1),h1=factor(h1) %>% as.integer,cut=cut(N,breaks=c(0,1,10,max(N))))]
+    ,color='white',size=.1,aes(y=h1,x=yr)) + theme_gray() + 
+      coord_fixed() + 
+      scale_x_continuous(expand = c(0,0),breaks = seq(1920,2020,20),minor_breaks = seq(1910,2010,20),limits = c(NA,2020),sec.axis = dup_axis()) + 
+      scale_y_continuous(expand = c(0,0),breaks=NULL) + 
+      theme(axis.text.y = element_blank(),legend.position = 'none',plot.background = element_rect(fill='gray92'),panel.background = element_rect(fill=NA),panel.ontop = v,panel.grid.major = element_line(size = rel(0.5)),title = element_text(size=8)) + xlab(NULL)+ylab('')}
+  cowplot::plot_grid(
+    h+geom_tile(aes(fill=N))+ scale_fill_viridis_c(option='plasma') + ggtitle('N citations by cluster') + ylab(ifelse(v,'<-- larger total cluster size','<-- more contiguous cluster spread'))
+    ,h+geom_tile(aes(fill=log(N)))+ scale_fill_viridis_c(option='plasma') + ggtitle('log(N) citations and cluster')
+    ,h+geom_tile(aes(fill=cut)) + ggtitle('Red:N=1, Green:1<N<11, Blue:N>10')
+    ,h+geom_tile(aes(fill=cut %>% forcats::fct_rev(.) %>% {levels(.) %<>% replace(.,2:3,NA);.})) + scale_fill_hue(h=c(360/3*2,360)+15,na.value='gray92') + ggtitle('N>10 (Blue only) ')
+    ,nrow = 1)->hm[[length(hm)+1]]
+}
+144 %>% {ggsave('d/b/heat-sort-size.pdf',plot=hm[[1]],units = 'in',dpi = .,width = 1920/.,height=1080/.)}
+144 %>% {ggsave('d/b/heat-sort-contiguity.pdf',plot=hm[[2]],units = 'in',dpi = .,width = 1920/.,height=1080/.)}
+```
+
+```{r yr2cp}
+f<-'d/p/yr2cp.RData' #%>% unlink
+if(file.exists(f)){
+  load(f)
+  load(sub('yr2cp','cp2all',f))
+} else {
+  yr2cp.f<-function(cc2yr){
+    ryr<-cc2yr$yr %>% range %>% as.list %>% do.call(what=seq)
+    grd<-dcast(
+      copy(cc2yr)[,yr:=factor(yr,levels = ryr)]
+      ,formula=yr~h1,value.var = 'N',fill=0,drop = F) %>% 
+      setorder(yr)
+    withr::with_seed(12345,{
+      t<-lapply(1:3,function(x) data.table(ov2chpt.f(grd[,!'yr'],drv = x,drv.only = T)) %>% {.[,.SD,.SDcols=-(1:(ncol(.)/2))]}) %>% do.call(what=data.table) %>% {data.table(grd,.)}
+    })
+    cmb<-data.table(n=names(t)[-1])[,key:=strsplit(n,'_') %>% sapply(last)][!grepl('d',key),key:='d0']
+    set<-cmb$key %>% unique %>% {lapply(1:length(.),function(x) combn(.,x) %>% data.table)} %>% do.call(what=c)
+    ncmb<-sapply(set,paste0,collapse='_')
+    names(set)<-ncmb
+    set<-lapply(set,function(x) cmb[x,on='key',n])
+    per<-pbapply::pblapply(set,function(sd) ecp::e.divisive(t[,.SD,.SDcols=sd],min.size=2,sig.lvl = .01,R=1000),cl=nc)
+    grp<-data.table(yr=grd$yr,sapply(per,function(x) x$cluster))
+    all<-melt(grp,id.vars = 'yr',variable.name='cmb',value.name='period')
+    all[,cmb:=factor(cmb,levels=ncmb)][,period:=factor(period)]
+    ap<-ggplot(copy(all)[,yr:=yr %>% as.character %>% as.integer]) + stat_bin(geom='area',position='identity',aes(x=yr,fill=period),binwidth = 1,alpha=.75,color=NA)+scale_fill_brewer(palette=ifelse(uniqueN(all$period)>8,'Paired','Dark2')) + scale_x_continuous(expand=c(0,0))+ scale_y_continuous(expand=c(0,0))
+    list(dat=all,plt=ap)
+  }
+  cp2all.f<-function(cc2yr){
+    ryr<-cc2yr$yr %>% range %>% as.list %>% do.call(what=seq)
+    grd<-dcast(
+      copy(cc2yr)[,yr:=factor(yr,levels = ryr)]
+      ,formula=yr~h1,value.var = 'N',fill=0,drop = F) %>% 
+      setorder(yr)
+    withr::with_seed(12345,{
+      grd<-grd[,.(yr,a=.SD %>% apply(1,sum)),.SDcols=!'yr']
+      a<-lapply(1:3,function(x) data.table(ov2chpt.f(grd[,!'yr'],drv = x,drv.only = T)) %>% {.[,.SD,.SDcols=-(1:(ncol(.)/2))]}) %>% do.call(what=data.table) %>% {data.table(grd,.)}
+    })
+    cmb<-names(a)[-1] %>% {lapply(1:length(.),function(x) combn(.,x) %>% data.table)} %>% do.call(what=c)
+    ncmb<-sapply(cmb,function(x) sub('a_','',x) %>% paste0(collapse='_'))
+    names(cmb)<-ncmb
+    per<-pbapply::pblapply(cmb,function(sd) ecp::e.divisive(a[,.SD,.SDcols=sd],min.size=2,sig.lvl = .01,R=1000),cl=nc)
+    grd<-data.table(grd,sapply(per,function(x) x$cluster) %>% data.table)
+    all<-melt(grd,id.vars = ec('yr,a'),variable.name='cmb',value.name='period')
+    all[,cmb:=factor(cmb,levels=ncmb)][,period:=factor(period)]
+    all %>% setnames('a','A')
+    ap<-ggplot(copy(all)[,yr:=yr %>% as.character %>% as.integer]) + stat_bin(geom='area',position='identity',aes(x=yr,fill=period),binwidth = 1,alpha=.75,color=NA)+scale_fill_brewer(palette=ifelse(uniqueN(all$period)>8,'Paired','Dark2')) + scale_x_continuous(expand=c(0,0))+ scale_y_continuous(expand=c(0,0))
+    list(dat=all,plt=ap)
+  }
+  
+  #linear growth assumption
+  yr2cp<-yr2cp.f(cc2yr)
+  save(yr2cp,file=f)
+  fwrite(yr2cp$dat %>% dcast(yr~cmb,value.var='period'),file=sub('p','b',f) %>% sub('RData','csv',.),sep=',',quote = F)
+  144 %>% {ggsave(sub('p','b',f) %>% sub('RData','png',.),plot=yr2cp$plt,units = 'in',dpi = .,width = 1920/.,height=1080/.)}
+  htmlwidgets::saveWidget(file = sub('p','b',f) %>% sub('RData','html',.) %>% paste(getwd(),.,sep='/'),widget =  yr2cp$plt %>% plt(hovinf = 'text'))
+  
+  cp2all<-cp2all.f(cc2yr)
+  save(cp2all,file=sub('yr2cp','cp2all',f))
+  fwrite(cp2all$dat %>% dcast(yr+A~cmb,value.var='period'),file=sub('p','b',sub('yr2cp','cp2all',f)) %>% sub('RData','csv',.),sep=',',quote = F)
+  144 %>% {ggsave(sub('p','b',sub('yr2cp','cp2all',f)) %>% sub('RData','png',.),plot=cp2all$plt,units = 'in',dpi = .,width = 1920/.,height=1080/.)}
+  htmlwidgets::saveWidget(file = sub('p','b',sub('yr2cp','cp2all',f)) %>% sub('RData','html',.) %>% paste(getwd(),.,sep='/'),widget =  cp2all$plt %>% plt(hovinf = 'text'))
+  
+  # "logarithmic" (Inverse hyperbolic sine) growth assumption
+  yr2cp_ihs<-yr2cp.f(copy(cc2yr)[,N:=ihs(N)])
+  save(yr2cp_ihs,file=sub('\\.RData','-ihs.csv',f))
+  fwrite(yr2cp_ihs$dat %>% dcast(yr~cmb,value.var='period'),file=sub('p','b',f) %>% sub('\\.RData','-ihs.csv',.),sep=',',quote = F)
+  144 %>% {ggsave(filename = sub('p','b',f) %>% sub('\\.RData','-ihs.png',.),plot=yr2cp_ihs$plt,units = 'in',dpi = .,width = 1920/.,height=1080/.)}
+  htmlwidgets::saveWidget(file = sub('p','b',f) %>% sub('\\.RData','-ihs.html',.) %>% paste(getwd(),.,sep='/'),widget =  yr2cp_ihs$plt %>% plt(hovinf = 'text'))
+  
+  cp2all_ihs<-cp2all.f(copy(cc2yr)[,N:=ihs(N)])
+  save(cp2all_ihs,file=sub('yr2cp','cp2all-ihs',f))
+  fwrite(cp2all_ihs$dat %>% dcast(yr+A~cmb,value.var='period'),file=sub('p','b',sub('yr2cp','cp2all',f)) %>% sub('\\.RData','-ihs.csv',.),sep=',',quote = F)
+  144 %>% {ggsave(filename = sub('p','b',sub('yr2cp','cp2all',f)) %>% sub('\\.RData','-ihs.png',.),plot=cp2all_ihs$plt,units = 'in',dpi = .,width = 1920/.,height=1080/.)}
+  htmlwidgets::saveWidget(file = sub('p','b',sub('yr2cp','cp2all',f)) %>% sub('\\.RData','-ihs.html',.) %>% paste(getwd(),.,sep='/'),widget =  cp2all_ihs$plt %>% plt(hovinf = 'text'))
+  
+}
+rm(f)
 ```
 
 ```{r mel2cel}
+# community edge lists
 f<-'d/p/mel2cel.RData'
 if(file.exists(f)){
   load(f)
