@@ -1,7 +1,7 @@
 FROM rocker/binder:3.6.3
 
 # Copy your repository contents to the image
-COPY --chown=rstudio:rstudio . ${HOME}
+COPY --chown=${NB_USER}:${NB_USER} . ${HOME}
 
 # set local r installation paths
 ENV LOCR=/home/${NB_USER}/.local/R
