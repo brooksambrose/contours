@@ -4,7 +4,7 @@ FROM rocker/binder:3.6.3
 COPY --chown=rstudio:rstudio . ${HOME}
 
 # set local r installation paths
-ENV LOCR=/home/rstudio/.local/R
+ENV LOCR=/home/${NB_USER}/.local/R
 
 RUN mkdir ${LOCR}
 
